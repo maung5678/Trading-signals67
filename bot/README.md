@@ -80,8 +80,8 @@ Candle close: 07/11 22:15
 
 | ค่า | ความหมาย |
 |---|---|
-| `symbols` | สัญลักษณ์ใน Deriv API เช่น `BOOM1000`, `BOOM500`, `CRASH1000`, `R_75` |
-| `timeframes_minutes` | 1, 2, 3, 5, 10, 15, 30, 60, 120, 240, 480, 1440 |
+| `watchlist` | กำหนด timeframe แยกตามสินทรัพย์ เช่น `[{"symbol": "cryBTCUSD", "timeframes": [1]}]` (ถ้ามี จะใช้แทน `symbols`/`timeframes_minutes`) |
+| `symbols` + `timeframes_minutes` | แบบง่าย: ทุกสินทรัพย์ × ทุก timeframe. Timeframe: 1, 2, 3, 5, 10, 15, 30, 60, 120, 240, 480, 1440 |
 | `supertrend_factor`, `atr_period`, `sl_atr_mult`, `tp_rr` | ให้ตรงกับ Settings ของอินดิเคเตอร์ |
 | `poll_seconds` | เช็กราคาทุกกี่วินาที (ค่าเริ่มต้น 20 — ต่ำกว่าขีดจำกัด Deriv: 220 ครั้ง/นาที, 14,400 ครั้ง/ชม.) |
 | `notify_tp_sl` | แจ้งเมื่อถึง TP1/TP2/TP3 หรือโดน SL |

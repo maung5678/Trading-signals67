@@ -264,6 +264,13 @@ def signal_message(symbol, tf, trade, granularity, cfg):
 # ---------------------------------------------------------------------------
 # Main loop
 # ---------------------------------------------------------------------------
+def watch_pairs(cfg):
+    """(symbol, minutes) pairs. "watchlist" sets timeframes per symbol; otherwise symbols x timeframes_minutes."""
+    if cfg.get("watchlist"):
+        return [(w["symbol"], int(tf)) for w in cfg["watchlist"] for tf in w["timeframes"]]
+    return [(s, int(tf)) for s in cfg["symbols"] for tf in cfg["timeframes_minutes"]]
+
+
 def load_config():
     cfg = dict(DEFAULT_CONFIG)
     if os.path.exists(CONFIG_PATH):
@@ -332,25 +339,23 @@ def process(deriv, cfg, state, symbol, tf):
 def run_test(cfg):
     deriv = Deriv(cfg)
     print("Deriv API limits:", json.dumps(deriv.api_limits(), indent=1))
-    for symbol in cfg["symbols"]:
-        for tf in cfg["timeframes_minutes"]:
-            gran = tf * 60
-            candles = deriv.closed_candles(symbol, gran, cfg["candles"])
-            highs = [c["high"] for c in candles]
-            lows = [c["low"] for c in candles]
-            closes = [c["close"] for c in candles]
-            _, direction, atr = supertrend(highs, lows, closes, cfg["supertrend_factor"], cfg["atr_period"])
-            last_sig = None
-            for i in range(1, len(candles)):
-                if direction[i] is None or direction[i - 1] is None:
-                    continue
-                if direction[i] != direction[i - 1]:
-                    last_sig = make_trade("LONG" if direction[i] < 0 else "SHORT", candles[i], atr[i], cfg)
-            trend = "UP" if direction[-1] == -1 else "DOWN"
-            print("%s [%dm]: %d candles, trend now %s, close %s" % (symbol, tf, len(candles), trend, fmt(closes[-1])))
-            if last_sig:
-                title, body = signal_message(symbol, tf, last_sig, gran, cfg)
-                print("  Last signal (history):", title.replace("\n", " "), "|", body.replace("\n", " | "))
+    for symbol, tf in watch_pairs(cfg):
+        gran = tf * 60
+        candles = deriv.closed_candles(symbol, gran, cfg["candles"])
+        highs = [c["high"] for c in candles]
+        lows = [c["low"] for c in candles]
+        closes = [c["close"] for c in candles]
+        _, direction, atr = supertrend(highs, lows, closes, cfg["supertrend_factor"], cfg["atr_period"])
+        last_sig = None
+        for i in range(1, len(candles)):
+            side = signal_at(direction, i)
+            if side:
+                last_sig = make_trade(side, candles[i], atr[i], cfg)
+        trend = "UP" if direction[-1] == -1 else "DOWN"
+        print("%s [%dm]: %d candles, trend now %s, close %s" % (symbol, tf, len(candles), trend, fmt(closes[-1])))
+        if last_sig:
+            title, body = signal_message(symbol, tf, last_sig, gran, cfg)
+            print("  Last signal (history):", title, "|", body.replace("\n", " | "))
     deriv.close()
     notify(cfg, "🧪 Test: signal bot is working", "If you see this, notifications are set up correctly.")
 
@@ -364,13 +369,12 @@ def main():
         return
     state = load_state()
     deriv = Deriv(cfg)
-    print("Bot started. Symbols=%s timeframes=%s min. Ctrl+C to stop." % (cfg["symbols"], cfg["timeframes_minutes"]), flush=True)
+    print("Bot started. Watching: %s. Ctrl+C to stop." % ", ".join("%s %dm" % p for p in watch_pairs(cfg)), flush=True)
     backoff = 5
     while True:
         try:
-            for symbol in cfg["symbols"]:
-                for tf in cfg["timeframes_minutes"]:
-                    process(deriv, cfg, state, symbol, tf)
+            for symbol, tf in watch_pairs(cfg):
+                process(deriv, cfg, state, symbol, tf)
             save_state(state)
             backoff = 5
             time.sleep(cfg["poll_seconds"])

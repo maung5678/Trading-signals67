@@ -1,10 +1,33 @@
 {
-  "symbols": ["BOOM1000"],
-  "timeframes_minutes": [5, 15],
+  "watchlist": [
+    {
+      "symbol": "BOOM1000",
+      "timeframes": [
+        5,
+        15
+      ]
+    },
+    {
+      "symbol": "cryBTCUSD",
+      "timeframes": [
+        1
+      ]
+    },
+    {
+      "symbol": "CRASH1000",
+      "timeframes": [
+        15
+      ]
+    }
+  ],
   "supertrend_factor": 2.5,
   "atr_period": 14,
   "sl_atr_mult": 1.5,
-  "tp_rr": [1.0, 2.0, 3.0],
+  "tp_rr": [
+    1.0,
+    2.0,
+    3.0
+  ],
   "poll_seconds": 20,
   "notify_tp_sl": true,
   "notify_termux": true,
