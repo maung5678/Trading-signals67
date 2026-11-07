@@ -7,6 +7,11 @@ string CALCULATION_GROUP = "Calculation"
 string DISPLAY_GROUP = "Display"
 string TRADE_LEVEL_GROUP = "Trade levels"
 string STYLE_GROUP = "Style"
+string DASHBOARD_GROUP = "Dashboards (hide / compact)"
+string NOTIFY_GROUP = "Notifications (LINE / Telegram)"
+string MODE_FULL = "Full"
+string MODE_COMPACT = "Compact"
+string MODE_HIDDEN = "Hidden"
 
 // --- Inputs ---
 factorInput = input.float(2.5, "Factor", minval = 0.01, step = 0.01, tooltip = "Multiplier for the ATR-based Supertrend distance.", group = CALCULATION_GROUP)
@@ -20,11 +25,7 @@ showBoxesInput = input.bool(true, "Show trade zones", tooltip = "Displays profit
 showTpMarksInput = input.bool(true, "Mark reached take-profits", tooltip = "Marks TP1, TP2 and TP3 when price reaches each level.", group = DISPLAY_GROUP)
 showPriceLabelsInput = input.bool(true, "Show price labels", tooltip = "Displays exact setup prices in labels to the right of the chart.", group = DISPLAY_GROUP)
 priceLabelOffsetInput = input.int(15, "Price-label offset", minval = 0, maxval = 500, tooltip = "Number of bars to offset Entry, TP and SL labels to the right.", group = DISPLAY_GROUP)
-showStatsInput = input.bool(true, "Show win-rate statistics", tooltip = "Displays completed setup statistics. A trade counts as a win as soon as TP1 is reached.", group = DISPLAY_GROUP)
 showCandleColorsInput = input.bool(true, "Color candles by trend", tooltip = "Colors candles according to the current Supertrend direction.", group = DISPLAY_GROUP)
-showAdxDashboardInput = input.bool(true, "Show ADX dashboard", tooltip = "Displays trend strength, direction and the ADX trading filter status.", group = DISPLAY_GROUP)
-showMtfDashboardInput = input.bool(true, "Show multi-timeframe dashboard", tooltip = "Displays a bullish/bearish score from 0 to 100 for 5m, 15m, 1h, 4h and 1D.", group = DISPLAY_GROUP)
-showTradeHistoryInput = input.bool(true, "Show trade history", tooltip = "Displays the 10 most recent completed trades or trades ended by an opposite signal, including direction, TP, RR and SL status.", group = DISPLAY_GROUP)
 showKeyLevelsInput = input.bool(false, "Show key support/resistance levels", tooltip = "Automatically groups pivot levels into horizontal support and resistance levels.", group = DISPLAY_GROUP)
 showTrendLinesInput = input.bool(true, "Show Supertrend lines", tooltip = "Displays the bullish and bearish Supertrend lines.", group = DISPLAY_GROUP)
 showDiagonalTrendLinesInput = input.bool(false, "Show diagonal trendlines", tooltip = "Displays the latest confirmed diagonal support and resistance lines based on pivot points.", group = DISPLAY_GROUP)
@@ -62,6 +63,32 @@ supportTrendLineColorInput = input.color(#089981, "Support trendline", tooltip =
 resistanceTrendLineColorInput = input.color(#f23645, "Resistance trendline", tooltip = "Color of the diagonal resistance line.", group = STYLE_GROUP)
 channelColorInput = input.color(#5b9cf6, "Trend channel", tooltip = "Color of the upper and lower channel lines.", group = STYLE_GROUP)
 channelFillTransparencyInput = input.int(94, "Channel fill transparency", minval = 0, maxval = 100, tooltip = "Transparency of the area inside the trend channel.", group = STYLE_GROUP)
+
+// --- Dashboard inputs ---
+hideAllDashboardsInput = input.bool(false, "Hide ALL dashboards", tooltip = "Master switch. When enabled, every table on the chart is hidden regardless of the settings below.", group = DASHBOARD_GROUP)
+showTelegramBannerInput = input.bool(false, "Show Telegram banner", tooltip = "Shows the 'Join Telegram' banner at the top of the chart.", group = DASHBOARD_GROUP)
+dashboardTextSizeInput = input.string(size.small, "Dashboard text size", options = [size.tiny, size.small, size.normal], group = DASHBOARD_GROUP)
+statsModeInput = input.string(MODE_COMPACT, "Win-rate statistics", options = [MODE_FULL, MODE_COMPACT, MODE_HIDDEN], inline = "stats", tooltip = "Full = all rows, Compact = win rate and profit only, Hidden = off.", group = DASHBOARD_GROUP)
+statsPositionInput = input.string(position.top_right, "", options = [position.top_left, position.top_center, position.top_right, position.middle_left, position.middle_right, position.bottom_left, position.bottom_center, position.bottom_right], inline = "stats", group = DASHBOARD_GROUP)
+adxModeInput = input.string(MODE_COMPACT, "ADX dashboard", options = [MODE_FULL, MODE_COMPACT, MODE_HIDDEN], inline = "adx", tooltip = "Full = all rows, Compact = ADX value and filter only, Hidden = off.", group = DASHBOARD_GROUP)
+adxPositionInput = input.string(position.middle_right, "", options = [position.top_left, position.top_center, position.top_right, position.middle_left, position.middle_right, position.bottom_left, position.bottom_center, position.bottom_right], inline = "adx", group = DASHBOARD_GROUP)
+mtfModeInput = input.string(MODE_COMPACT, "Multi-timeframe dashboard", options = [MODE_FULL, MODE_COMPACT, MODE_HIDDEN], inline = "mtf", tooltip = "Full = score table, Compact = one row of arrows (▲ bullish, ▼ bearish, • neutral), Hidden = off.", group = DASHBOARD_GROUP)
+mtfPositionInput = input.string(position.bottom_right, "", options = [position.top_left, position.top_center, position.top_right, position.middle_left, position.middle_right, position.bottom_left, position.bottom_center, position.bottom_right], inline = "mtf", group = DASHBOARD_GROUP)
+historyModeInput = input.string(MODE_HIDDEN, "Trade history", options = [MODE_FULL, MODE_COMPACT, MODE_HIDDEN], inline = "hist", tooltip = "Full = last 10 trades, Compact = last 3 trades, Hidden = off.", group = DASHBOARD_GROUP)
+historyPositionInput = input.string(position.middle_left, "", options = [position.top_left, position.top_center, position.top_right, position.middle_left, position.middle_right, position.bottom_left, position.bottom_center, position.bottom_right], inline = "hist", group = DASHBOARD_GROUP)
+
+bool showStatsInput = not hideAllDashboardsInput and statsModeInput != MODE_HIDDEN
+bool showAdxDashboardInput = not hideAllDashboardsInput and adxModeInput != MODE_HIDDEN
+bool showMtfDashboardInput = not hideAllDashboardsInput and mtfModeInput != MODE_HIDDEN
+bool showTradeHistoryInput = not hideAllDashboardsInput and historyModeInput != MODE_HIDDEN
+bool showTelegramBanner = not hideAllDashboardsInput and showTelegramBannerInput
+
+// --- Notification inputs ---
+alertOnSignalInput = input.bool(true, "Alert on new BUY/SELL signal", tooltip = "Sends a message with Entry, SL, TP1, TP2 and TP3 when a new signal is confirmed on bar close.", group = NOTIFY_GROUP)
+alertOnTpInput = input.bool(true, "Alert when TP1/TP2/TP3 is reached", group = NOTIFY_GROUP)
+alertOnSlInput = input.bool(true, "Alert when stop loss is hit", group = NOTIFY_GROUP)
+alertFormatInput = input.string("Text (TradingView app / LINE relay)", "Message format", options = ["Text (TradingView app / LINE relay)", "Telegram JSON (webhook)"], tooltip = "Text = readable message for the TradingView app, e-mail or a LINE relay script. Telegram JSON = body that the Telegram Bot API accepts directly from a TradingView webhook.", group = NOTIFY_GROUP)
+telegramChatIdInput = input.string("", "Telegram chat_id", tooltip = "Only used with 'Telegram JSON'. Your personal/group chat id, e.g. 123456789 or -1001234567890.", group = NOTIFY_GROUP)
 
 // --- Helper functions ---
 createPriceLabel(int x, float price, string title, color labelColor) =>
@@ -198,6 +225,7 @@ var array<string> tradeSlHistory = array.new_string(0)
 bool takeProfit1HitEvent = false
 bool takeProfit2HitEvent = false
 bool takeProfit3HitEvent = false
+bool stopLossHitEvent = false
 var int tradeStartBar = na
 var line entryLevelLine = na
 var line takeProfit1LevelLine = na
@@ -281,6 +309,7 @@ if not (buySignal or sellSignal) and tradeDirection != 0 and not tradeResolved
     bool stopHitForStats = tradeDirection == 1 ? low <= stopLossLevel : high >= stopLossLevel
     bool takeProfit1HitForStats = tradeDirection == 1 ? high >= takeProfit1Level : low <= takeProfit1Level
     if stopHitForStats
+        stopLossHitEvent := true
         losingTrades += 1
         totalProfitR -= 1.0
         if not tradeHistoryRecorded
@@ -350,8 +379,12 @@ if not (buySignal or sellSignal) and tradeDirection != 0
 // === Dashboard with Telegram Link ===
 var table myTable = table.new(position.top_center, 1, 1, border_width=1, frame_color=color.black, bgcolor=color.white)
 
-// Add Telegram Message to Dashboard
-table.cell(myTable, 0, 0, "Join Telegram @freeindicatores", bgcolor=color.blue, text_color=color.white, text_size=size.normal)
+// Add Telegram Message to Dashboard (optional)
+if barstate.islast
+    if showTelegramBanner
+        table.cell(myTable, 0, 0, "Join Telegram @freeindicatores", bgcolor=color.blue, text_color=color.white, text_size=size.normal)
+    else
+        table.clear(myTable, 0, 0)
 // --- Horizontal trade-level lines ---
 if buySignal or sellSignal
     tradeStartBar := bar_index
@@ -647,114 +680,155 @@ plotshape(showTpMarksInput and takeProfit2HitEvent ? takeProfit2Level : na, titl
 plotshape(showTpMarksInput and takeProfit3HitEvent ? takeProfit3Level : na, title = "TP3 reached", style = shape.labelup, location = location.absolute, color = takeProfit3ColorInput, text = "✓ TP3", textcolor = color.white, size = size.tiny)
 barcolor(showCandleColorsInput ? (isUpTrend ? color.new(candleUpColorInput, candleTransparencyInput) : isDownTrend ? color.new(candleDownColorInput, candleTransparencyInput) : na) : na)
 
-// --- Alert conditions ---
+// --- Alert conditions (manual alerts, one per event) ---
 alertcondition(buySignal, "Supertrend Buy", "Supertrend BUY on {{ticker}} at {{close}}")
 alertcondition(sellSignal, "Supertrend Sell", "Supertrend SELL on {{ticker}} at {{close}}")
 alertcondition(takeProfit1HitEvent, "TP1 reached", "TP1 reached on {{ticker}} at {{close}}")
 alertcondition(takeProfit2HitEvent, "TP2 reached", "TP2 reached on {{ticker}} at {{close}}")
 alertcondition(takeProfit3HitEvent, "TP3 reached", "TP3 reached on {{ticker}} at {{close}}")
+alertcondition(stopLossHitEvent, "Stop loss hit", "Stop loss hit on {{ticker}} at {{close}}")
+
+// --- Detailed notifications (create ONE alert with "Any alert() function call") ---
+fmtPrice(float price) =>
+    str.tostring(price, format.mintick)
+
+sendNotification(string body) =>
+    string message = body
+    if alertFormatInput == "Telegram JSON (webhook)"
+        // Newlines must be escaped inside JSON strings.
+        string escaped = str.replace_all(str.replace_all(body, "\"", "'"), "\n", "\\n")
+        message := "{\"chat_id\":\"" + telegramChatIdInput + "\",\"text\":\"" + escaped + "\"}"
+    alert(message, alert.freq_once_per_bar_close)
+
+string notifyHeader = syminfo.ticker + " [" + timeframe.period + "]"
+if alertOnSignalInput and (buySignal or sellSignal)
+    string sideText = buySignal ? "🟢 BUY" : "🔴 SELL"
+    sendNotification(sideText + " " + notifyHeader
+         + "\nEntry: " + fmtPrice(entryLevel)
+         + "\nSL: " + fmtPrice(stopLossLevel)
+         + "\nTP1: " + fmtPrice(takeProfit1Level)
+         + "\nTP2: " + fmtPrice(takeProfit2Level)
+         + "\nTP3: " + fmtPrice(takeProfit3Level))
+if alertOnTpInput and (takeProfit1HitEvent or takeProfit2HitEvent or takeProfit3HitEvent)
+    string tpText = takeProfit3HitEvent ? "TP3" : takeProfit2HitEvent ? "TP2" : "TP1"
+    float tpPrice = takeProfit3HitEvent ? takeProfit3Level : takeProfit2HitEvent ? takeProfit2Level : takeProfit1Level
+    sendNotification("✅ " + tpText + " reached " + notifyHeader + "\nPrice: " + fmtPrice(tpPrice))
+if alertOnSlInput and stopLossHitEvent
+    sendNotification("⛔ Stop loss hit " + notifyHeader + "\nSL: " + fmtPrice(stopLossLevel))
+
+// --- Dashboard helpers ---
+dashCell(table t, int col, int row, string txt, color txtColor, color bg = na) =>
+    table.cell(t, col, row, txt, text_color = txtColor, bgcolor = bg, text_size = dashboardTextSizeInput)
+
+color dashHeaderBg = color.new(entryColorInput, 70)
+stateColor(string state) =>
+    state == "Bullish" ? upColorInput : state == "Bearish" ? downColorInput : chart.fg_color
+stateArrow(string state) =>
+    state == "Bullish" ? "▲" : state == "Bearish" ? "▼" : "•"
 
 // --- Win-rate table ---
-var table statsTable = table.new(position.top_right, 2, 7, bgcolor = color.new(chart.bg_color, 10), frame_color = color.new(chart.fg_color, 100), frame_width = 0, border_color = color.new(chart.fg_color, 100), border_width = 0)
+var table statsTable = table.new(statsPositionInput, 2, 7, bgcolor = color.new(chart.bg_color, 10), frame_color = color.new(chart.fg_color, 100), frame_width = 0, border_color = color.new(chart.fg_color, 100), border_width = 0)
 if barstate.islast
+    table.clear(statsTable, 0, 0, 1, 6)
     if showStatsInput
         int closedTrades = winningTrades + losingTrades
         string winRateText = closedTrades > 0 ? str.tostring(100.0 * winningTrades / closedTrades, "#.##") + " %" : "n/a"
-        table.cell(statsTable, 0, 0, "Supertrend statistics", text_color = chart.fg_color, bgcolor = color.new(entryColorInput, 70), text_size = size.small)
-        table.cell(statsTable, 1, 0, "", text_color = chart.fg_color, bgcolor = color.new(entryColorInput, 70), text_size = size.small)
-        table.cell(statsTable, 0, 1, "Signals", text_color = chart.fg_color, text_size = size.small)
-        table.cell(statsTable, 1, 1, str.tostring(totalSignals), text_color = chart.fg_color, text_size = size.small)
-        table.cell(statsTable, 0, 2, "Evaluated", text_color = chart.fg_color, text_size = size.small)
-        table.cell(statsTable, 1, 2, str.tostring(closedTrades), text_color = chart.fg_color, text_size = size.small)
-        table.cell(statsTable, 0, 3, "Wins (TP1)", text_color = upColorInput, text_size = size.small)
-        table.cell(statsTable, 1, 3, str.tostring(winningTrades), text_color = upColorInput, text_size = size.small)
-        table.cell(statsTable, 0, 4, "Losses (SL)", text_color = downColorInput, text_size = size.small)
-        table.cell(statsTable, 1, 4, str.tostring(losingTrades), text_color = downColorInput, text_size = size.small)
-        table.cell(statsTable, 0, 5, "Win rate (TP1)", text_color = chart.fg_color, text_size = size.small)
-        table.cell(statsTable, 1, 5, winRateText, text_color = chart.fg_color, text_size = size.small)
-        table.cell(statsTable, 0, 6, "Profit (R)", text_color = totalProfitR >= 0 ? upColorInput : downColorInput, text_size = size.small)
-        table.cell(statsTable, 1, 6, str.tostring(totalProfitR, "#.##") + " R", text_color = totalProfitR >= 0 ? upColorInput : downColorInput, text_size = size.small)
-    else
-        table.clear(statsTable, 0, 0, 1, 6)
+        color profitColor = totalProfitR >= 0 ? upColorInput : downColorInput
+        if statsModeInput == MODE_COMPACT
+            dashCell(statsTable, 0, 0, "Win rate", chart.fg_color, dashHeaderBg)
+            dashCell(statsTable, 1, 0, winRateText, chart.fg_color, dashHeaderBg)
+            dashCell(statsTable, 0, 1, "Profit", profitColor)
+            dashCell(statsTable, 1, 1, str.tostring(totalProfitR, "#.##") + " R", profitColor)
+        else
+            dashCell(statsTable, 0, 0, "Supertrend statistics", chart.fg_color, dashHeaderBg)
+            dashCell(statsTable, 1, 0, "", chart.fg_color, dashHeaderBg)
+            dashCell(statsTable, 0, 1, "Signals", chart.fg_color)
+            dashCell(statsTable, 1, 1, str.tostring(totalSignals), chart.fg_color)
+            dashCell(statsTable, 0, 2, "Evaluated", chart.fg_color)
+            dashCell(statsTable, 1, 2, str.tostring(closedTrades), chart.fg_color)
+            dashCell(statsTable, 0, 3, "Wins (TP1)", upColorInput)
+            dashCell(statsTable, 1, 3, str.tostring(winningTrades), upColorInput)
+            dashCell(statsTable, 0, 4, "Losses (SL)", downColorInput)
+            dashCell(statsTable, 1, 4, str.tostring(losingTrades), downColorInput)
+            dashCell(statsTable, 0, 5, "Win rate (TP1)", chart.fg_color)
+            dashCell(statsTable, 1, 5, winRateText, chart.fg_color)
+            dashCell(statsTable, 0, 6, "Profit (R)", profitColor)
+            dashCell(statsTable, 1, 6, str.tostring(totalProfitR, "#.##") + " R", profitColor)
 
 // --- ADX dashboard ---
 string adxPhase = na(adxValue) ? "Waiting for data" : adxValue < adxRangeThresholdInput ? "Range" : adxValue < adxStrongThresholdInput ? "Transition" : "Strong trend"
 color adxPhaseColor = adxPhase == "Strong trend" ? upColorInput : adxPhase == "Range" ? downColorInput : chart.fg_color
 string adxDirectionText = na(adxValue) ? "n/a" : diPlus > diMinus ? "Bullish" : diMinus > diPlus ? "Bearish" : "Neutral"
 bool adxFilterActive = not na(adxValue) and adxValue >= adxStrongThresholdInput and ((isUpTrend and diPlus > diMinus) or (isDownTrend and diMinus > diPlus))
-var table adxDashboardTable = table.new(position.middle_right, 2, 8, bgcolor = color.new(chart.bg_color, 10), frame_color = color.new(chart.fg_color, 100), frame_width = 0, border_color = color.new(chart.fg_color, 100), border_width = 0)
+var table adxDashboardTable = table.new(adxPositionInput, 2, 8, bgcolor = color.new(chart.bg_color, 10), frame_color = color.new(chart.fg_color, 100), frame_width = 0, border_color = color.new(chart.fg_color, 100), border_width = 0)
 if barstate.islast
+    table.clear(adxDashboardTable, 0, 0, 1, 7)
     if showAdxDashboardInput
-        table.cell(adxDashboardTable, 0, 0, "ADX dashboard", text_color = chart.fg_color, bgcolor = color.new(entryColorInput, 70), text_size = size.small)
-        table.cell(adxDashboardTable, 1, 0, "", text_color = chart.fg_color, bgcolor = color.new(entryColorInput, 70), text_size = size.small)
-        table.cell(adxDashboardTable, 0, 1, "ADX", text_color = chart.fg_color, text_size = size.small)
-        table.cell(adxDashboardTable, 1, 1, na(adxValue) ? "n/a" : str.tostring(adxValue, "#.##"), text_color = adxPhaseColor, text_size = size.small)
-        table.cell(adxDashboardTable, 0, 2, "+DI", text_color = upColorInput, text_size = size.small)
-        table.cell(adxDashboardTable, 1, 2, na(diPlus) ? "n/a" : str.tostring(diPlus, "#.##"), text_color = upColorInput, text_size = size.small)
-        table.cell(adxDashboardTable, 0, 3, "-DI", text_color = downColorInput, text_size = size.small)
-        table.cell(adxDashboardTable, 1, 3, na(diMinus) ? "n/a" : str.tostring(diMinus, "#.##"), text_color = downColorInput, text_size = size.small)
-        table.cell(adxDashboardTable, 0, 4, "Market phase", text_color = chart.fg_color, text_size = size.small)
-        table.cell(adxDashboardTable, 1, 4, adxPhase, text_color = adxPhaseColor, text_size = size.small)
-        table.cell(adxDashboardTable, 0, 5, "DI direction", text_color = chart.fg_color, text_size = size.small)
-        table.cell(adxDashboardTable, 1, 5, adxDirectionText, text_color = adxDirectionText == "Bullish" ? upColorInput : adxDirectionText == "Bearish" ? downColorInput : chart.fg_color, text_size = size.small)
-        table.cell(adxDashboardTable, 0, 6, "Supertrend", text_color = chart.fg_color, text_size = size.small)
-        table.cell(adxDashboardTable, 1, 6, isUpTrend ? "Uptrend" : isDownTrend ? "Downtrend" : "n/a", text_color = isUpTrend ? upColorInput : downColorInput, text_size = size.small)
-        table.cell(adxDashboardTable, 0, 7, "Filter", text_color = chart.fg_color, text_size = size.small)
-        table.cell(adxDashboardTable, 1, 7, adxFilterActive ? "Trend eligible" : "Wait", text_color = adxFilterActive ? upColorInput : downColorInput, text_size = size.small)
-    else
-        table.clear(adxDashboardTable, 0, 0, 1, 7)
+        string adxText = na(adxValue) ? "n/a" : str.tostring(adxValue, "#.##")
+        if adxModeInput == MODE_COMPACT
+            dashCell(adxDashboardTable, 0, 0, "ADX " + adxText, adxPhaseColor, dashHeaderBg)
+            dashCell(adxDashboardTable, 1, 0, adxFilterActive ? "Trend eligible" : "Wait", adxFilterActive ? upColorInput : downColorInput, dashHeaderBg)
+        else
+            dashCell(adxDashboardTable, 0, 0, "ADX dashboard", chart.fg_color, dashHeaderBg)
+            dashCell(adxDashboardTable, 1, 0, "", chart.fg_color, dashHeaderBg)
+            dashCell(adxDashboardTable, 0, 1, "ADX", chart.fg_color)
+            dashCell(adxDashboardTable, 1, 1, adxText, adxPhaseColor)
+            dashCell(adxDashboardTable, 0, 2, "+DI", upColorInput)
+            dashCell(adxDashboardTable, 1, 2, na(diPlus) ? "n/a" : str.tostring(diPlus, "#.##"), upColorInput)
+            dashCell(adxDashboardTable, 0, 3, "-DI", downColorInput)
+            dashCell(adxDashboardTable, 1, 3, na(diMinus) ? "n/a" : str.tostring(diMinus, "#.##"), downColorInput)
+            dashCell(adxDashboardTable, 0, 4, "Market phase", chart.fg_color)
+            dashCell(adxDashboardTable, 1, 4, adxPhase, adxPhaseColor)
+            dashCell(adxDashboardTable, 0, 5, "DI direction", chart.fg_color)
+            dashCell(adxDashboardTable, 1, 5, adxDirectionText, stateColor(adxDirectionText))
+            dashCell(adxDashboardTable, 0, 6, "Supertrend", chart.fg_color)
+            dashCell(adxDashboardTable, 1, 6, isUpTrend ? "Uptrend" : isDownTrend ? "Downtrend" : "n/a", isUpTrend ? upColorInput : downColorInput)
+            dashCell(adxDashboardTable, 0, 7, "Filter", chart.fg_color)
+            dashCell(adxDashboardTable, 1, 7, adxFilterActive ? "Trend eligible" : "Wait", adxFilterActive ? upColorInput : downColorInput)
 
 // --- Multi-timeframe dashboard ---
-var table mtfDashboardTable = table.new(position.bottom_right, 3, 6, bgcolor = color.new(chart.bg_color, 10), frame_color = color.new(chart.fg_color, 100), frame_width = 0, border_color = color.new(chart.fg_color, 100), border_width = 0)
+var table mtfDashboardTable = table.new(mtfPositionInput, 5, 6, bgcolor = color.new(chart.bg_color, 10), frame_color = color.new(chart.fg_color, 100), frame_width = 0, border_color = color.new(chart.fg_color, 100), border_width = 0)
 if barstate.islast
+    table.clear(mtfDashboardTable, 0, 0, 4, 5)
     if showMtfDashboardInput
-        table.cell(mtfDashboardTable, 0, 0, "Timeframe", text_color = chart.fg_color, bgcolor = color.new(entryColorInput, 70), text_size = size.small)
-        table.cell(mtfDashboardTable, 1, 0, "Score", text_color = chart.fg_color, bgcolor = color.new(entryColorInput, 70), text_size = size.small)
-        table.cell(mtfDashboardTable, 2, 0, "Direction", text_color = chart.fg_color, bgcolor = color.new(entryColorInput, 70), text_size = size.small)
-        table.cell(mtfDashboardTable, 0, 1, "5m", text_color = chart.fg_color, text_size = size.small)
-        table.cell(mtfDashboardTable, 1, 1, str.tostring(score5m, "#.##"), text_color = scoreColor(score5m), text_size = size.small)
-        table.cell(mtfDashboardTable, 2, 1, state5m, text_color = state5m == "Bullish" ? upColorInput : state5m == "Bearish" ? downColorInput : chart.fg_color, text_size = size.small)
-        table.cell(mtfDashboardTable, 0, 2, "15m", text_color = chart.fg_color, text_size = size.small)
-        table.cell(mtfDashboardTable, 1, 2, str.tostring(score15m, "#.##"), text_color = scoreColor(score15m), text_size = size.small)
-        table.cell(mtfDashboardTable, 2, 2, state15m, text_color = state15m == "Bullish" ? upColorInput : state15m == "Bearish" ? downColorInput : chart.fg_color, text_size = size.small)
-        table.cell(mtfDashboardTable, 0, 3, "1h", text_color = chart.fg_color, text_size = size.small)
-        table.cell(mtfDashboardTable, 1, 3, str.tostring(score1h, "#.##"), text_color = scoreColor(score1h), text_size = size.small)
-        table.cell(mtfDashboardTable, 2, 3, state1h, text_color = state1h == "Bullish" ? upColorInput : state1h == "Bearish" ? downColorInput : chart.fg_color, text_size = size.small)
-        table.cell(mtfDashboardTable, 0, 4, "4h", text_color = chart.fg_color, text_size = size.small)
-        table.cell(mtfDashboardTable, 1, 4, str.tostring(score4h, "#.##"), text_color = scoreColor(score4h), text_size = size.small)
-        table.cell(mtfDashboardTable, 2, 4, state4h, text_color = state4h == "Bullish" ? upColorInput : state4h == "Bearish" ? downColorInput : chart.fg_color, text_size = size.small)
-        table.cell(mtfDashboardTable, 0, 5, "1D", text_color = chart.fg_color, text_size = size.small)
-        table.cell(mtfDashboardTable, 1, 5, str.tostring(score1d, "#.##"), text_color = scoreColor(score1d), text_size = size.small)
-        table.cell(mtfDashboardTable, 2, 5, state1d, text_color = state1d == "Bullish" ? upColorInput : state1d == "Bearish" ? downColorInput : chart.fg_color, text_size = size.small)
-    else
-        table.clear(mtfDashboardTable, 0, 0, 2, 5)
+        array<string> mtfNames = array.from("5m", "15m", "1h", "4h", "1D")
+        array<float> mtfScores = array.from(score5m, score15m, score1h, score4h, score1d)
+        array<string> mtfStates = array.from(state5m, state15m, state1h, state4h, state1d)
+        if mtfModeInput == MODE_COMPACT
+            for i = 0 to 4
+                string st = array.get(mtfStates, i)
+                dashCell(mtfDashboardTable, i, 0, array.get(mtfNames, i) + " " + stateArrow(st), stateColor(st))
+        else
+            dashCell(mtfDashboardTable, 0, 0, "Timeframe", chart.fg_color, dashHeaderBg)
+            dashCell(mtfDashboardTable, 1, 0, "Score", chart.fg_color, dashHeaderBg)
+            dashCell(mtfDashboardTable, 2, 0, "Direction", chart.fg_color, dashHeaderBg)
+            for i = 0 to 4
+                float sc = array.get(mtfScores, i)
+                string st = array.get(mtfStates, i)
+                dashCell(mtfDashboardTable, 0, i + 1, array.get(mtfNames, i), chart.fg_color)
+                dashCell(mtfDashboardTable, 1, i + 1, str.tostring(sc, "#.##"), scoreColor(sc))
+                dashCell(mtfDashboardTable, 2, i + 1, st, stateColor(st))
 
 // --- Recent trade history dashboard ---
-var table tradeHistoryTable = table.new(position.middle_left, 5, 11, bgcolor = color.new(chart.bg_color, 10), frame_color = color.new(chart.fg_color, 100), frame_width = 0, border_color = color.new(chart.fg_color, 100), border_width = 0)
+var table tradeHistoryTable = table.new(historyPositionInput, 5, 11, bgcolor = color.new(chart.bg_color, 10), frame_color = color.new(chart.fg_color, 100), frame_width = 0, border_color = color.new(chart.fg_color, 100), border_width = 0)
 if barstate.islast
+    table.clear(tradeHistoryTable, 0, 0, 4, 10)
     if showTradeHistoryInput
-        table.cell(tradeHistoryTable, 0, 0, "#", text_color = chart.fg_color, bgcolor = color.new(entryColorInput, 70), text_size = size.small)
-        table.cell(tradeHistoryTable, 1, 0, "Direction", text_color = chart.fg_color, bgcolor = color.new(entryColorInput, 70), text_size = size.small)
-        table.cell(tradeHistoryTable, 2, 0, "Outcome", text_color = chart.fg_color, bgcolor = color.new(entryColorInput, 70), text_size = size.small)
-        table.cell(tradeHistoryTable, 3, 0, "R:R", text_color = chart.fg_color, bgcolor = color.new(entryColorInput, 70), text_size = size.small)
-        table.cell(tradeHistoryTable, 4, 0, "Stopped out", text_color = chart.fg_color, bgcolor = color.new(entryColorInput, 70), text_size = size.small)
-        for historyIndex = 0 to 9
+        int historyRows = historyModeInput == MODE_COMPACT ? 3 : 10
+        dashCell(tradeHistoryTable, 0, 0, "#", chart.fg_color, dashHeaderBg)
+        dashCell(tradeHistoryTable, 1, 0, "Direction", chart.fg_color, dashHeaderBg)
+        dashCell(tradeHistoryTable, 2, 0, "Outcome", chart.fg_color, dashHeaderBg)
+        dashCell(tradeHistoryTable, 3, 0, "R:R", chart.fg_color, dashHeaderBg)
+        dashCell(tradeHistoryTable, 4, 0, "Stopped out", chart.fg_color, dashHeaderBg)
+        for historyIndex = 0 to historyRows - 1
             int historyRow = historyIndex + 1
             if historyIndex < array.size(tradeDirectionHistory)
                 string historyDirection = array.get(tradeDirectionHistory, historyIndex)
                 string historyOutcome = array.get(tradeOutcomeHistory, historyIndex)
                 float historyRr = array.get(tradeRrHistory, historyIndex)
                 string historySl = array.get(tradeSlHistory, historyIndex)
-                table.cell(tradeHistoryTable, 0, historyRow, str.tostring(historyRow), text_color = chart.fg_color, text_size = size.small)
-                table.cell(tradeHistoryTable, 1, historyRow, historyDirection, text_color = historyDirection == "Long" ? upColorInput : downColorInput, text_size = size.small)
-                table.cell(tradeHistoryTable, 2, historyRow, historyOutcome, text_color = historyOutcome == "SL" ? downColorInput : upColorInput, text_size = size.small)
-                table.cell(tradeHistoryTable, 3, historyRow, str.tostring(historyRr, "#.##") + "R", text_color = historyRr >= 0 ? upColorInput : downColorInput, text_size = size.small)
-                table.cell(tradeHistoryTable, 4, historyRow, historySl, text_color = historySl == "Yes" ? downColorInput : upColorInput, text_size = size.small)
-            else
-                table.cell(tradeHistoryTable, 0, historyRow, "", text_color = chart.fg_color, text_size = size.small)
-                table.cell(tradeHistoryTable, 1, historyRow, "", text_color = chart.fg_color, text_size = size.small)
-                table.cell(tradeHistoryTable, 2, historyRow, "", text_color = chart.fg_color, text_size = size.small)
-                table.cell(tradeHistoryTable, 3, historyRow, "", text_color = chart.fg_color, text_size = size.small)
-                table.cell(tradeHistoryTable, 4, historyRow, "", text_color = chart.fg_color, text_size = size.small)
-    else
-        table.clear(tradeHistoryTable, 0, 0, 4, 10)
+                dashCell(tradeHistoryTable, 0, historyRow, str.tostring(historyRow), chart.fg_color)
+                dashCell(tradeHistoryTable, 1, historyRow, historyDirection, historyDirection == "Long" ? upColorInput : downColorInput)
+                dashCell(tradeHistoryTable, 2, historyRow, historyOutcome, historyOutcome == "SL" ? downColorInput : upColorInput)
+                dashCell(tradeHistoryTable, 3, historyRow, str.tostring(historyRr, "#.##") + "R", historyRr >= 0 ? upColorInput : downColorInput)
+                dashCell(tradeHistoryTable, 4, historyRow, historySl, historySl == "Yes" ? downColorInput : upColorInput)
