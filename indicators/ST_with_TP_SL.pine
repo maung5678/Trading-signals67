@@ -683,6 +683,8 @@ barcolor(showCandleColorsInput ? (isUpTrend ? color.new(candleUpColorInput, cand
 // --- Alert conditions (manual alerts, one per event) ---
 alertcondition(buySignal, "Supertrend Buy", "Supertrend BUY on {{ticker}} at {{close}}")
 alertcondition(sellSignal, "Supertrend Sell", "Supertrend SELL on {{ticker}} at {{close}}")
+alertcondition(buySignal or sellSignal, "Long or Short signal", "{{ticker}} new signal at {{close}} (side: {{plot(\"Signal side\")}} = 1 LONG / -1 SHORT)")
+plot(buySignal ? 1 : sellSignal ? -1 : 0, "Signal side", display = display.none)
 alertcondition(takeProfit1HitEvent, "TP1 reached", "TP1 reached on {{ticker}} at {{close}}")
 alertcondition(takeProfit2HitEvent, "TP2 reached", "TP2 reached on {{ticker}} at {{close}}")
 alertcondition(takeProfit3HitEvent, "TP3 reached", "TP3 reached on {{ticker}} at {{close}}")
