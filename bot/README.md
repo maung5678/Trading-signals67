@@ -90,6 +90,19 @@ Candle close: 07/11 22:15
 | `deriv_app_id` | ค่าเริ่มต้น `1089` (app_id สาธารณะ) — ถ้าใช้ไม่ได้ ให้สมัครของตัวเองฟรีที่ api.deriv.com |
 | `deriv_ws_urls` | รายการเซิร์ฟเวอร์ Deriv ที่ลองตามลำดับ (บางตัวตอบ error 520 — บอทสลับให้เอง) |
 
+## รหัสสินทรัพย์ที่ใช้ได้ (ทดสอบกับ Deriv API แล้ว)
+
+| ใน config | ชื่อใน MT5 / TradingView |
+|---|---|
+| `BOOM1000`, `BOOM500`, `BOOM300N` | Boom 1000 / 500 / 300 Index |
+| `CRASH1000`, `CRASH500`, `CRASH300N` | Crash 1000 / 500 / 300 Index |
+| `R_10`, `R_75`, `R_100` | Volatility 10 / 75 / 100 Index |
+| `1HZ75V`, `1HZ100V` | Volatility 75 (1s) / 100 (1s) Index |
+| `stpRNG` | Step Index |
+| `JD25` | Jump 25 Index |
+| `frxXAUUSD`, `frxEURUSD` | Gold/USD, EUR/USD |
+| `cryBTCUSD` | BTC/USD |
+
 ## ข้อจำกัด
 
 - สัญญาณมาจาก Supertrend flip เท่านั้น (ค่าเริ่มต้นของอินดิเคเตอร์) — ฟิลเตอร์เสริม เช่น ADX / EMA200 /
