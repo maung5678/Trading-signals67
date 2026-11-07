@@ -1,0 +1,4 @@
+bot/config.json
+bot/state.json
+bot/state.json.tmp
+__pycache__/

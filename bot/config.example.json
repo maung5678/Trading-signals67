@@ -1,0 +1,15 @@
+{
+  "symbols": ["BOOM1000"],
+  "timeframes_minutes": [5, 15],
+  "supertrend_factor": 2.5,
+  "atr_period": 14,
+  "sl_atr_mult": 1.5,
+  "tp_rr": [1.0, 2.0, 3.0],
+  "poll_seconds": 20,
+  "notify_tp_sl": true,
+  "notify_termux": true,
+  "telegram_bot_token": "",
+  "telegram_chat_id": "",
+  "deriv_app_id": "1089",
+  "timezone_offset_hours": 7
+}
