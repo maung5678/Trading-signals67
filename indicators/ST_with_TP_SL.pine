@@ -702,13 +702,15 @@ sendNotification(string body) =>
 
 string notifyHeader = syminfo.ticker + " [" + timeframe.period + "]"
 if alertOnSignalInput and (buySignal or sellSignal)
-    string sideText = buySignal ? "🟢 BUY" : "🔴 SELL"
+    string sideText = buySignal ? "🟢 LONG (Buy)" : "🔴 SHORT (Sell)"
+    float riskPoints = math.abs(entryLevel - stopLossLevel)
     sendNotification(sideText + " " + notifyHeader
          + "\nEntry: " + fmtPrice(entryLevel)
-         + "\nSL: " + fmtPrice(stopLossLevel)
+         + "\nSL: " + fmtPrice(stopLossLevel) + " (risk " + fmtPrice(riskPoints) + ")"
          + "\nTP1: " + fmtPrice(takeProfit1Level)
          + "\nTP2: " + fmtPrice(takeProfit2Level)
-         + "\nTP3: " + fmtPrice(takeProfit3Level))
+         + "\nTP3: " + fmtPrice(takeProfit3Level)
+         + "\nTime: " + str.format_time(time_close, "dd/MM HH:mm", "Asia/Bangkok"))
 if alertOnTpInput and (takeProfit1HitEvent or takeProfit2HitEvent or takeProfit3HitEvent)
     string tpText = takeProfit3HitEvent ? "TP3" : takeProfit2HitEvent ? "TP2" : "TP1"
     float tpPrice = takeProfit3HitEvent ? takeProfit3Level : takeProfit2HitEvent ? takeProfit2Level : takeProfit1Level

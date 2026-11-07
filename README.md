@@ -30,13 +30,24 @@
 ตัวอย่างข้อความที่ได้รับ:
 
 ```
-🟢 BUY XAUUSD [15]
+🟢 LONG (Buy) XAUUSD [15]
 Entry: 2650.35
-SL: 2641.20
+SL: 2641.20 (risk 9.15)
 TP1: 2659.50
 TP2: 2668.65
 TP3: 2677.80
+Time: 07/11 14:30
 ```
+
+### ใช้งานจริง: รับแจ้งเตือนบนมือถือ แล้วเข้าออเดอร์เองใน MT4/MT5
+
+- **ไม่ต้องเปิดคอมหรือแอปค้างไว้**: Alert รันบนเซิร์ฟเวอร์ TradingView ตลอด 24 ชม.
+- โทรศัพท์ได้ push notification แม้ปิดแอปอยู่ (เปิดสิทธิ์แจ้งเตือนของแอป TradingView/Telegram ไว้)
+- เมื่อได้รับ: เปิดแอป MT5 → New order → เลือก Buy (LONG) หรือ Sell (SHORT)
+  → ใส่ **Stop Loss** และ **Take Profit** (TP1/TP2/TP3 ตามที่ต้องการ) จากข้อความ
+- ชื่อสัญลักษณ์ใน MT อาจต่างจาก TradingView เช่น `XAUUSD` vs `XAUUSDm` และราคาโบรกอาจต่างเล็กน้อย
+  ควรใช้กราฟของโบรกเดียวกันบน TradingView ถ้ามี (เช่น `OANDA:XAUUSD`, `EXNESS:XAUUSD`)
+- แพ็กเกจฟรีของ TradingView มีจำนวน Alert และระยะเวลาหมดอายุจำกัด: ตรวจที่หน้า Alerts ว่ายัง Active
 
 ### สร้าง Alert ใน TradingView (ทำครั้งเดียวต่อกราฟ)
 
