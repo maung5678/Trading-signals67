@@ -34,7 +34,14 @@ STATE_PATH = os.path.join(HERE, "state.json")
 
 DEFAULT_CONFIG = {
     "deriv_app_id": "1089",
-    "deriv_ws_url": "wss://ws.derivws.com/websockets/v3",
+    # Tried in order; the bot switches to the next one when a server refuses the connection.
+    "deriv_ws_urls": [
+        "wss://red.derivws.com/websockets/v3",
+        "wss://ws.derivws.com/websockets/v3",
+        "wss://green.derivws.com/websockets/v3",
+        "wss://blue.derivws.com/websockets/v3",
+        "wss://ws.binaryws.com/websockets/v3",
+    ],
     "symbols": ["BOOM1000"],
     "timeframes_minutes": [5, 15],
     "supertrend_factor": 2.5,
@@ -152,13 +159,24 @@ def update_trade(trade, candle):
 # ---------------------------------------------------------------------------
 class Deriv:
     def __init__(self, cfg):
-        self.url = "%s?app_id=%s" % (cfg["deriv_ws_url"], cfg["deriv_app_id"])
+        urls = cfg.get("deriv_ws_urls") or [cfg.get("deriv_ws_url")]
+        self.urls = ["%s?app_id=%s" % (u, cfg["deriv_app_id"]) for u in urls if u]
+        self.idx = 0
         self.ws = None
 
     def _conn(self):
-        if self.ws is None:
-            self.ws = websocket.create_connection(self.url, timeout=30)
-        return self.ws
+        if self.ws is not None:
+            return self.ws
+        errors = []
+        for k in range(len(self.urls)):
+            url = self.urls[(self.idx + k) % len(self.urls)]
+            try:
+                self.ws = websocket.create_connection(url, timeout=30, origin="https://app.deriv.com")
+                self.idx = (self.idx + k) % len(self.urls)
+                return self.ws
+            except Exception as exc:
+                errors.append("%s -> %s" % (url.split("/websockets")[0], str(exc)[:60]))
+        raise ConnectionError("all Deriv servers failed: " + "; ".join(errors))
 
     def call(self, payload):
         try:

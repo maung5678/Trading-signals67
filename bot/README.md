@@ -83,11 +83,12 @@ Candle close: 07/11 22:15
 | `symbols` | สัญลักษณ์ใน Deriv API เช่น `BOOM1000`, `BOOM500`, `CRASH1000`, `R_75` |
 | `timeframes_minutes` | 1, 2, 3, 5, 10, 15, 30, 60, 120, 240, 480, 1440 |
 | `supertrend_factor`, `atr_period`, `sl_atr_mult`, `tp_rr` | ให้ตรงกับ Settings ของอินดิเคเตอร์ |
-| `poll_seconds` | เช็กราคาทุกกี่วินาที (ค่าเริ่มต้น 20 — ต่ำกว่าขีดจำกัด Deriv มาก) |
+| `poll_seconds` | เช็กราคาทุกกี่วินาที (ค่าเริ่มต้น 20 — ต่ำกว่าขีดจำกัด Deriv: 220 ครั้ง/นาที, 14,400 ครั้ง/ชม.) |
 | `notify_tp_sl` | แจ้งเมื่อถึง TP1/TP2/TP3 หรือโดน SL |
 | `notify_termux` | เด้งแจ้งเตือนในมือถือผ่าน Termux:API |
 | `telegram_bot_token`, `telegram_chat_id` | ส่งเข้า Telegram ด้วย (ดูวิธีขอใน README หลัก) |
 | `deriv_app_id` | ค่าเริ่มต้น `1089` (app_id สาธารณะ) — ถ้าใช้ไม่ได้ ให้สมัครของตัวเองฟรีที่ api.deriv.com |
+| `deriv_ws_urls` | รายการเซิร์ฟเวอร์ Deriv ที่ลองตามลำดับ (บางตัวตอบ error 520 — บอทสลับให้เอง) |
 
 ## ข้อจำกัด
 
