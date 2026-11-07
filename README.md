@@ -51,7 +51,7 @@ Time: 07/11 14:30
 
 ### สร้าง Alert ใน TradingView (ทำครั้งเดียวต่อกราฟ)
 
-1. กด **Alert (⏰)** → Condition: เลือก **Supertrend CURRENT** → **Any alert() function call**
+1. กด **Alert (⏰)** → Condition: เลือก **ST Alerts v2** → **Any alert() function call**
 2. Expiration: ตั้งเป็น Open-ended (ถ้าแพ็กเกจรองรับ)
 3. แท็บ **Notifications** เลือกช่องทางตามด้านล่าง → **Create**
 

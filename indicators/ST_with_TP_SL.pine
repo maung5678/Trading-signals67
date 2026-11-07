@@ -1,6 +1,6 @@
 // This Pine Script® code is subject to the terms of the Mozilla Public License 2.0 at https://mozilla.org/MPL/2.0/ MPL-2.0
 //@version=6
-indicator("Supertrend with Entry, TP1, TP2 & TP3 [CURRENT]", "Supertrend CURRENT", overlay = true, max_boxes_count = 20, max_lines_count = 20, max_labels_count = 50)
+indicator("Supertrend TP/SL + Alerts v2", "ST Alerts v2", overlay = true, max_boxes_count = 20, max_lines_count = 20, max_labels_count = 50)
 
 // --- Input groups ---
 string CALCULATION_GROUP = "Calculation"
