@@ -1,38 +1,84 @@
 {
-  "watchlist": [
-    {
-      "symbol": "BOOM1000",
-      "timeframes": [
-        5,
-        15
-      ]
-    },
+  "assets": [
     {
       "symbol": "cryBTCUSD",
+      "label": "BTCUSD",
+      "enabled": true,
       "timeframes": [
         1
-      ]
+      ],
+      "alerts": {
+        "signal": true,
+        "tp1": true,
+        "tp2": true,
+        "tp3": true,
+        "sl": true
+      }
     },
     {
       "symbol": "CRASH1000",
+      "label": "Crash 1000 Index",
+      "enabled": true,
       "timeframes": [
         15
-      ]
+      ],
+      "alerts": {
+        "signal": true,
+        "tp1": true,
+        "tp2": true,
+        "tp3": true,
+        "sl": true
+      }
+    },
+    {
+      "symbol": "BOOM1000",
+      "label": "Boom 1000 Index",
+      "enabled": true,
+      "timeframes": [
+        15
+      ],
+      "alerts": {
+        "signal": true,
+        "tp1": true,
+        "tp2": true,
+        "tp3": true,
+        "sl": true
+      }
     }
   ],
-  "supertrend_factor": 2.5,
-  "atr_period": 14,
-  "sl_atr_mult": 1.5,
-  "tp_rr": [
-    1.0,
-    2.0,
-    3.0
-  ],
+  "strategy": {
+    "supertrend_factor": 2.5,
+    "atr_period": 14,
+    "sl_atr_mult": 1.5,
+    "tp_rr": [
+      1.0,
+      2.0,
+      3.0
+    ]
+  },
+  "notify": {
+    "termux": true,
+    "style": "detailed",
+    "emoji": true,
+    "fields": {
+      "entry": true,
+      "sl": true,
+      "risk": true,
+      "tp1": true,
+      "tp2": true,
+      "tp3": true,
+      "time": true
+    },
+    "priority": "max",
+    "vibrate": "500,200,500",
+    "led_color": "00ff00",
+    "signal_sound": "system",
+    "tpsl_sound": "system",
+    "sound_file": "",
+    "tts_lang": "th",
+    "telegram_bot_token": "",
+    "telegram_chat_id": ""
+  },
   "poll_seconds": 20,
-  "notify_tp_sl": true,
-  "notify_termux": true,
-  "telegram_bot_token": "",
-  "telegram_chat_id": "",
-  "deriv_app_id": "1089",
   "timezone_offset_hours": 7
 }
