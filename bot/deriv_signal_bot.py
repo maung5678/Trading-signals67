@@ -63,11 +63,15 @@ DEFAULT_ALERTS = {"signal": True, "tp1": True, "tp2": True, "tp3": True, "sl": T
 
 DEFAULT_CONFIG = {
     "assets": [
-        {"symbol": "cryBTCUSD", "label": "BTCUSD", "enabled": True, "timeframes": [1], "alerts": dict(DEFAULT_ALERTS)},
-        {"symbol": "CRASH1000", "label": "Crash 1000 Index", "enabled": True, "timeframes": [15], "alerts": dict(DEFAULT_ALERTS)},
-        {"symbol": "BOOM1000", "label": "Boom 1000 Index", "enabled": True, "timeframes": [15], "alerts": dict(DEFAULT_ALERTS)},
+        {"symbol": "cryBTCUSD", "label": "BTCUSD", "enabled": True, "timeframes": [1], "confirm_tf": 0, "alerts": dict(DEFAULT_ALERTS)},
+        {"symbol": "CRASH1000", "label": "Crash 1000 Index", "enabled": True, "timeframes": [15], "confirm_tf": 0, "alerts": dict(DEFAULT_ALERTS)},
+        {"symbol": "BOOM1000", "label": "Boom 1000 Index", "enabled": True, "timeframes": [15], "confirm_tf": 0, "alerts": dict(DEFAULT_ALERTS)},
     ],
-    "strategy": {"supertrend_factor": 2.5, "atr_period": 14, "sl_atr_mult": 1.5, "tp_rr": [1.0, 2.0, 3.0]},
+    "strategy": {
+        "supertrend_factor": 2.5, "atr_period": 14, "sl_atr_mult": 1.5, "tp_rr": [1.0, 2.0, 3.0],
+        # Same as the indicator's "สัญญาณเฉพาะตอน ADX แรง" + "เกณฑ์ ADX ของสัญญาณ".
+        "adx_filter": False, "adx_min": 25.0, "adx_length": 14, "adx_smoothing": 14,
+    },
     "notify": {
         "termux": True,
         "style": "detailed",  # detailed | compact
@@ -150,6 +154,45 @@ def supertrend(highs, lows, closes, factor, period):
     return st, direction, atr
 
 
+def rma(values, period):
+    """TradingView ta.rma: seeded with an SMA once `period` non-empty values exist."""
+    out = [None] * len(values)
+    prev = None
+    for i, v in enumerate(values):
+        if prev is None:
+            window = values[max(0, i - period + 1): i + 1]
+            if len(window) == period and all(x is not None for x in window):
+                prev = sum(window) / period
+        elif v is not None:
+            prev = (prev * (period - 1) + v) / period
+        out[i] = prev
+    return out
+
+
+def adx_dmi(highs, lows, closes, length, smoothing):
+    """TradingView ta.dmi(length, smoothing) -> (+DI, -DI, ADX) lists."""
+    n = len(closes)
+    tr, plus_dm, minus_dm = [None] * n, [None] * n, [None] * n
+    for i in range(n):
+        if i == 0:
+            tr[i] = highs[i] - lows[i]
+            continue
+        tr[i] = max(highs[i] - lows[i], abs(highs[i] - closes[i - 1]), abs(lows[i] - closes[i - 1]))
+        up, down = highs[i] - highs[i - 1], lows[i - 1] - lows[i]
+        plus_dm[i] = up if (up > down and up > 0) else 0.0
+        minus_dm[i] = down if (down > up and down > 0) else 0.0
+    trur, p_s, m_s = rma(tr, length), rma(plus_dm, length), rma(minus_dm, length)
+    plus, minus, dx = [None] * n, [None] * n, [None] * n
+    for i in range(n):
+        if trur[i] and p_s[i] is not None and m_s[i] is not None:
+            plus[i] = 100.0 * p_s[i] / trur[i]
+            minus[i] = 100.0 * m_s[i] / trur[i]
+            total = plus[i] + minus[i]
+            dx[i] = abs(plus[i] - minus[i]) / (total if total != 0 else 1.0)
+    adx = [None if v is None else 100.0 * v for v in rma(dx, smoothing)]
+    return plus, minus, adx
+
+
 def signal_at(direction, i):
     """'LONG' / 'SHORT' if the Supertrend direction flipped on candle i, else None."""
     if i < 1 or direction[i] is None or direction[i - 1] is None:
@@ -194,13 +237,15 @@ def update_trade(trade, candle):
         return events
     long_side = trade["side"] == "LONG"
     sl_hit = candle["low"] <= trade["sl"] if long_side else candle["high"] >= trade["sl"]
+    if sl_hit:
+        # Same rule as the indicator: SL is checked first. After TP1 it means "came back to SL".
+        events.append("SL_AFTER_TP" if any(trade["tp_hit"]) else "SL")
+        trade["closed"] = True
+        return events
     for k, tp in enumerate(trade["tps"]):
         if not trade["tp_hit"][k] and (candle["high"] >= tp if long_side else candle["low"] <= tp):
             trade["tp_hit"][k] = True
             events.append("TP%d" % (k + 1))
-    if sl_hit and not any(trade["tp_hit"]):
-        events.append("SL")
-        trade["closed"] = True
     if all(trade["tp_hit"]):
         trade["closed"] = True
     return events
@@ -259,6 +304,7 @@ def normalize_config(raw):
             "label": str(a.get("label") or KNOWN_SYMBOLS.get(sym, sym))[:40],
             "enabled": bool(a.get("enabled", True)),
             "timeframes": tfs,
+            "confirm_tf": int(a.get("confirm_tf") or 0) if int(a.get("confirm_tf") or 0) in TIMEFRAMES else 0,
             "alerts": _merge(DEFAULT_ALERTS, {k: bool(v) for k, v in (a.get("alerts") or {}).items() if k in DEFAULT_ALERTS}),
         })
     cfg["assets"] = assets
@@ -268,6 +314,10 @@ def normalize_config(raw):
     s["atr_period"] = min(max(int(s["atr_period"]), 1), 100)
     s["sl_atr_mult"] = min(max(float(s["sl_atr_mult"]), 0.1), 20.0)
     s["tp_rr"] = [min(max(float(x), 0.1), 50.0) for x in list(s["tp_rr"])[:3]] or [1.0, 2.0, 3.0]
+    s["adx_filter"] = bool(s.get("adx_filter"))
+    s["adx_min"] = min(max(float(s.get("adx_min", 25.0)), 1.0), 100.0)
+    s["adx_length"] = min(max(int(s.get("adx_length", 14)), 1), 100)
+    s["adx_smoothing"] = min(max(int(s.get("adx_smoothing", 14)), 1), 100)
     while len(s["tp_rr"]) < 3:
         s["tp_rr"].append(s["tp_rr"][-1] + 1.0)
     n = cfg["notify"]
@@ -420,29 +470,30 @@ def fmt_time(epoch, cfg):
 
 
 def side_words(side):
-    return ("BUY", "Long") if side == "LONG" else ("SELL", "Short")
+    return ("BUY", "ซื้อ") if side == "LONG" else ("SELL", "ขาย")
 
 
 def signal_message(asset, tf, trade, cfg, late=False):
     n = cfg["notify"]
     f = n["fields"]
-    buy_sell, long_short = side_words(trade["side"])
+    buy_sell, thai = side_words(trade["side"])
+    d = trade.get("digits")
     icon = ("🟢 " if trade["side"] == "LONG" else "🔴 ") if n["emoji"] else ""
-    title = "%s%s (%s) %s [%dm]%s" % (icon, buy_sell, long_short, asset["label"], tf, " (late)" if late else "")
+    title = "%s%s (%s) %s [%dm]%s" % (icon, buy_sell, thai, asset["label"], tf, " (แจ้งช้า)" if late else "")
     parts = []
     if f.get("entry"):
-        parts.append(("Entry", fmt(trade["entry"], trade.get("digits"))))
+        parts.append(("เข้า", fmt(trade["entry"], d)))
     if f.get("sl"):
-        sl_text = fmt(trade["sl"], trade.get("digits"))
+        sl_text = fmt(trade["sl"], d)
         if f.get("risk"):
-            sl_text += " (risk %s)" % fmt(abs(trade["entry"] - trade["sl"]), trade.get("digits"))
+            sl_text += " (ระยะ %s)" % fmt(abs(trade["entry"] - trade["sl"]), d)
         parts.append(("SL", sl_text))
     for k, tp in enumerate(trade["tps"]):
         if f.get("tp%d" % (k + 1)):
-            parts.append(("TP%d" % (k + 1), fmt(tp, trade.get("digits"))))
+            parts.append(("TP%d" % (k + 1), fmt(tp, d)))
     if f.get("time"):
         # Candle OPEN time, the same label TradingView shows under each candle.
-        parts.append(("Candle", fmt_time(trade["epoch"], cfg)))
+        parts.append(("แท่ง", fmt_time(trade["epoch"], cfg)))
     if n["style"] == "compact":
         body = " | ".join("%s %s" % p for p in parts)
     else:
@@ -453,19 +504,25 @@ def signal_message(asset, tf, trade, cfg, late=False):
 def event_message(asset, tf, trade, event, cfg, hit_epoch=None):
     emoji = cfg["notify"]["emoji"]
     buy_sell, _ = side_words(trade["side"])
+    d = trade.get("digits")
     if event == "SL":
-        title = "%sSL hit %s [%dm]" % ("⛔ " if emoji else "", asset["label"], tf)
-        body = "%s trade stopped at SL %s" % (buy_sell, fmt(trade["sl"], trade.get("digits")))
+        title = "%sโดน SL %s [%dm]" % ("⛔ " if emoji else "", asset["label"], tf)
+        body = "ออเดอร์ %s ปิดที่ SL %s (−1R)" % (buy_sell, fmt(trade["sl"], d))
+    elif event == "SL_AFTER_TP":
+        best = max(k + 1 for k, hit in enumerate(trade["tp_hit"]) if hit)
+        title = "%sกลับมาโดน SL %s [%dm]" % ("⛔ " if emoji else "", asset["label"], tf)
+        body = "ออเดอร์ %s ถึง TP%d แล้วราคากลับมาที่ SL %s\nถ้าเลื่อน SL ไปที่จุดเข้า %s แล้ว = เสมอตัว" % (
+            buy_sell, best, fmt(trade["sl"], d), fmt(trade["entry"], d))
     else:
         k = int(event[2:]) - 1
-        title = "%s%s reached %s [%dm]" % ("✅ " if emoji else "", event, asset["label"], tf)
-        body = "%s trade: %s %s" % (buy_sell, event, fmt(trade["tps"][k], trade.get("digits")))
+        title = "%sถึง %s %s [%dm]" % ("✅ " if emoji else "", event, asset["label"], tf)
+        body = "ออเดอร์ %s: %s %s" % (buy_sell, event, fmt(trade["tps"][k], d))
         if k == 0 and len(trade["tps"]) > 1:
-            body += " (consider moving SL to entry %s)" % fmt(trade["entry"], trade.get("digits"))
+            body += "\nแนะนำเลื่อน SL ไปที่จุดเข้า %s" % fmt(trade["entry"], d)
     # Candle open times, same labels as TradingView.
     if hit_epoch is not None:
-        body += "\nHit candle: %s" % fmt_time(hit_epoch, cfg)
-    body += "\nEntry candle: %s" % fmt_time(trade["epoch"], cfg)
+        body += "\nแท่งที่ถึง: %s" % fmt_time(hit_epoch, cfg)
+    body += "\nแท่งที่เข้า: %s" % fmt_time(trade["epoch"], cfg)
     return title, body
 
 
@@ -476,21 +533,23 @@ def previous_trade_note(prev, events, price):
     buy_sell = side_words(prev["side"])[0]
     d = prev.get("digits")
     if "SL" in events:
-        return "⚠️ Previous %s hit SL %s (-1R)" % (buy_sell, fmt(prev["sl"], d))
-    if prev["closed"] and not events:
+        return "⚠️ ออเดอร์ %s เดิมโดน SL แล้วที่ %s (−1R)" % (buy_sell, fmt(prev["sl"], d))
+    if "SL_AFTER_TP" in events:
+        return "⚠️ ออเดอร์ %s เดิมกลับมาโดน SL แล้วที่ %s" % (buy_sell, fmt(prev["sl"], d))
+    if prev["closed"]:
         return ""  # finished earlier (TP3 or SL), already notified
     risk = abs(prev["entry"] - prev["sl"]) or 1e-9
     sign = 1 if prev["side"] == "LONG" else -1
     r = (price - prev["entry"]) * sign / risk
     prev["closed"] = True
-    return "⚠️ Close previous %s (entry %s) now at %s (%+.1fR)" % (buy_sell, fmt(prev["entry"], d), fmt(price, d), r)
+    return "⚠️ ปิดออเดอร์ %s เดิม (เข้า %s) ตอนนี้ที่ %s (%+.1fR)" % (buy_sell, fmt(prev["entry"], d), fmt(price, d), r)
 
 
 def speech_text(asset, tf, kind, cfg):
     th = cfg["notify"]["tts_lang"] == "th"
     if kind in ("LONG", "SHORT"):
         word = ("ซื้อ" if kind == "LONG" else "ขาย") if th else ("Buy" if kind == "LONG" else "Sell")
-    elif kind == "SL":
+    elif kind in ("SL", "SL_AFTER_TP"):
         word = "โดนสต็อปลอส" if th else "Stop loss hit"
     else:
         word = ("ถึง " + kind) if th else (kind + " reached")
@@ -566,7 +625,40 @@ def save_state(state):
     os.replace(tmp, STATE_PATH)
 
 
-def process(deriv, cfg, state, asset, tf, shared=None):
+def htf_direction_at(deriv, cfg, symbol, htf, open_epoch, cache):
+    """Supertrend direction of the last higher-timeframe candle that CLOSED by `open_epoch`
+    (same as the indicator's request.security(..., direction[1], lookahead_on))."""
+    key = (symbol, htf)
+    if key not in cache:
+        c = deriv.closed_candles(symbol, htf * 60, cfg["candles"])
+        s = cfg["strategy"]
+        _, d, _ = supertrend([x["high"] for x in c], [x["low"] for x in c], [x["close"] for x in c],
+                             s["supertrend_factor"], s["atr_period"])
+        cache[key] = (c, d)
+    c, d = cache[key]
+    for j in range(len(c) - 1, -1, -1):
+        if c[j]["epoch"] + htf * 60 <= open_epoch:
+            return d[j]
+    return None
+
+
+def filter_reasons(deriv, cfg, asset, tf, side, i, candle, adx, cache):
+    """Why a signal is blocked by the optional filters (empty list = allowed)."""
+    s = cfg["strategy"]
+    reasons = []
+    if s["adx_filter"] and (adx[i] is None or adx[i] <= s["adx_min"]):
+        reasons.append("ADX %s ≤ %g" % ("-" if adx[i] is None else "%.1f" % adx[i], s["adx_min"]))
+    htf = asset.get("confirm_tf") or 0
+    if htf > tf:
+        d = htf_direction_at(deriv, cfg, asset["symbol"], htf, candle["epoch"], cache)
+        need = -1 if side == "LONG" else 1
+        if d != need:
+            reasons.append("เทรนด์ %dm เป็น%s" % (htf, "ขาขึ้น" if d == -1 else "ขาลง" if d == 1 else "ไม่ทราบ"))
+    return reasons
+
+
+def process(deriv, cfg, state, asset, tf, shared=None, cache=None):
+    cache = {} if cache is None else cache
     symbol = asset["symbol"]
     key = "%s_%d" % (symbol, tf)
     gran = tf * 60
@@ -580,11 +672,13 @@ def process(deriv, cfg, state, asset, tf, shared=None):
     lows = [c["low"] for c in candles]
     closes = [c["close"] for c in candles]
     _, direction, atr = supertrend(highs, lows, closes, strategy["supertrend_factor"], strategy["atr_period"])
+    _, _, adx = adx_dmi(highs, lows, closes, strategy["adx_length"], strategy["adx_smoothing"])
     digits = price_digits(candles)
     if shared is not None:
         shared.set_status(key, symbol=symbol, label=asset["label"], tf=tf, checked=time.time(),
-                          candle=fmt_time(candles[-1]["epoch"] + gran, cfg), close=fmt(closes[-1]),
-                          trend="UP" if direction[-1] == -1 else "DOWN", error="")
+                          candle=fmt_time(candles[-1]["epoch"], cfg), close=fmt(closes[-1]),
+                          trend="UP" if direction[-1] == -1 else "DOWN", error="",
+                          adx="-" if adx[-1] is None else "%.1f" % adx[-1])
     st = state.setdefault(key, {"last_epoch": 0, "trade": None})
     if candles[-1]["epoch"] <= st["last_epoch"]:
         return  # no new closed candle yet
@@ -602,10 +696,17 @@ def process(deriv, cfg, state, asset, tf, shared=None):
             # so an SL/TP hit on the reversal candle is never skipped.
             events = update_trade(prev, candle)
             for ev in events:
-                if alerts.get(ev.lower()):
+                if alerts.get("sl" if ev.startswith("SL") else ev.lower()):
                     title, body = event_message(asset, tf, prev, ev, cfg, candle["epoch"])
                     notify(cfg, title, body, n["tpsl_sound"], speech_text(asset, tf, ev, cfg), symbol, shared)
         if side:
+            reasons = filter_reasons(deriv, cfg, asset, tf, side, i, candle, adx, cache)
+            if reasons:
+                msg = "%s %s ถูกกรอง (%s)" % (side_words(side)[0], fmt_time(candle["epoch"], cfg), ", ".join(reasons))
+                print("%s %s: %s" % (time.strftime("%H:%M:%S"), key, msg), flush=True)
+                if shared is not None:
+                    shared.set_status(key, filtered=msg)
+                continue
             st["trade"] = make_trade(side, candle, atr[i], strategy, digits)
             if not first_run and alerts["signal"]:
                 title, body = signal_message(asset, tf, st["trade"], cfg, late=i < len(candles) - 1)
@@ -616,9 +717,9 @@ def process(deriv, cfg, state, asset, tf, shared=None):
     st["last_epoch"] = candles[-1]["epoch"]
     if shared is not None and st.get("trade"):
         t = st["trade"]
-        shared.set_status(key, trade="%s @ %s, SL %s, TP %s" % (
-            side_words(t["side"])[0], fmt(t["entry"], t.get("digits")), fmt(t["sl"], t.get("digits")),
-            " / ".join(fmt(x, t.get("digits")) for x in t["tps"])))
+        shared.set_status(key, trade="%s%s @ %s, SL %s, TP %s" % (
+            side_words(t["side"])[0], " (จบแล้ว)" if t["closed"] else "", fmt(t["entry"], t.get("digits")),
+            fmt(t["sl"], t.get("digits")), " / ".join(fmt(x, t.get("digits")) for x in t["tps"])))
 
 
 def run_loop(shared):
@@ -628,11 +729,12 @@ def run_loop(shared):
     backoff = 5
     while True:
         cfg = shared.get_cfg()
+        cache = {}  # higher-timeframe candles, fetched at most once per round
         try:
             for asset, tf in watch_pairs(cfg):
                 key = "%s_%d" % (asset["symbol"], tf)
                 try:
-                    process(deriv, cfg, state, asset, tf, shared)
+                    process(deriv, cfg, state, asset, tf, shared, cache)
                 except DerivSymbolError as exc:  # bad symbol etc.: report it, keep the others running
                     shared.set_status(key, symbol=asset["symbol"], label=asset["label"], tf=tf,
                                       checked=time.time(), error=str(exc))
@@ -702,7 +804,7 @@ def make_handler(shared):
                 self._send(200, {"signal": sig, "tp": tp})
             elif path == "/api/test":
                 n = cfg["notify"]
-                notify(cfg, "🧪 TEST " + sig[0], sig[1], n["signal_sound"],
+                notify(cfg, "🧪 ทดสอบ " + sig[0], sig[1], n["signal_sound"],
                        speech_text(asset, tf, "LONG", cfg), "test", shared)
                 self._send(200, {"ok": True})
             else:
@@ -759,6 +861,13 @@ details summary{cursor:pointer;font-weight:600}
 <select id="addSel" class="grow"></select><button class="btn sec" onclick="addAsset()">+ เพิ่ม</button></div>
 <div class="row" style="margin-top:6px">
 <input type="text" id="addCode" class="grow" placeholder="หรือพิมพ์รหัส Deriv เอง เช่น R_50"></div></div>
+
+<div class="card"><h2>🧹 ตัวกรองสัญญาณ</h2>
+<div class="mut">ลดสัญญาณหลอกตอนตลาดไซด์เวย์ · ควรตั้งให้ตรงกับอินดิเคเตอร์บน TradingView</div>
+<div class="row" style="margin-top:8px"><label class="t"><input type="checkbox" id="adxF"> แจ้งเฉพาะตอน ADX มากกว่า</label><input type="number" step="0.5" id="adxMin"></div>
+<div class="mut">ADX = ความแรงของเทรนด์ 0–100 (ไม่บอกทิศ) · ต่ำกว่า 20 ไซด์เวย์ · 25 ขึ้นไปเริ่มมีเทรนด์<br>
+ตรงกับอินดิเคเตอร์: "สัญญาณเฉพาะตอน ADX แรง" + "เกณฑ์ ADX ของสัญญาณ"</div>
+<div class="mut" style="margin-top:6px">ยืนยันด้วยเทรนด์ไทม์เฟรมใหญ่: ตั้งแยกในแต่ละสินทรัพย์ด้านบน (ตรงกับ "กรองด้วยเทรนด์ TF ใหญ่")</div></div>
 
 <div class="card"><h2>💬 หน้าตาการแจ้งเตือน</h2>
 <div class="row"><label class="t"><input type="radio" name="style" value="detailed"> แบบละเอียด (หลายบรรทัด)</label>
@@ -820,6 +929,7 @@ function fill(){
   $("tgToken").value=n.telegram_bot_token;$("tgChat").value=n.telegram_chat_id;$("termux").checked=n.termux;
   $("factor").value=s.supertrend_factor;$("atr").value=s.atr_period;$("slm").value=s.sl_atr_mult;
   [1,2,3].forEach(i=>$("tp"+i).value=s.tp_rr[i-1]);$("poll").value=cfg.poll_seconds;
+  $("adxF").checked=s.adx_filter;$("adxMin").value=s.adx_min;
   document.querySelectorAll("input,select").forEach(e=>{if(!e.dataset.bound){e.dataset.bound=1;e.addEventListener("change",sync)}});
   preview();
 }
@@ -832,6 +942,7 @@ function sync(){
   n.vibrate=$("vib").value;n.telegram_bot_token=$("tgToken").value.trim();n.telegram_chat_id=$("tgChat").value.trim();n.termux=$("termux").checked;
   s.supertrend_factor=+$("factor").value;s.atr_period=+$("atr").value;s.sl_atr_mult=+$("slm").value;
   s.tp_rr=[1,2,3].map(i=>+$("tp"+i).value);cfg.poll_seconds=+$("poll").value;
+  s.adx_filter=$("adxF").checked;s.adx_min=+$("adxMin").value;
   preview();
 }
 function renderAssets(){
@@ -841,6 +952,8 @@ function renderAssets(){
   <button class="btn del" onclick="delAsset(${i})">ลบ</button></div>
   <div class="row" style="margin:6px 0">${TFS.map(m=>`<button class="chip ${a.timeframes.includes(m)?"on":""}" onclick="toggleTf(${i},${m})">${tfName(m)}</button>`).join("")}</div>
   <div class="row">${Object.entries(ALERTS).map(([k,v])=>`<label class="t"><input type="checkbox" ${a.alerts[k]?"checked":""} onchange="cfg.assets[${i}].alerts['${k}']=this.checked"> ${v}</label>`).join("")}</div>
+  <div class="row" style="margin-bottom:6px"><span class="mut">ยืนยันด้วยเทรนด์ TF ใหญ่</span><select onchange="cfg.assets[${i}].confirm_tf=+this.value">
+  <option value="0">ไม่ใช้</option>${TFS.filter(m=>m>Math.min(...(a.timeframes.length?a.timeframes:[1]))).map(m=>`<option value="${m}" ${a.confirm_tf===m?"selected":""}>${tfName(m)}</option>`).join("")}</select></div>
   <div class="row"><span class="mut">ชื่อที่แสดง</span><input type="text" class="grow" value="${esc(a.label)}" onchange="cfg.assets[${i}].label=this.value;renderAssets();preview()"></div></div>`).join("")
   || `<div class="mut">ยังไม่มีสินทรัพย์</div>`;
   const used=new Set(cfg.assets.map(a=>a.symbol));
@@ -852,7 +965,7 @@ function addAsset(){
   const code=($("addCode").value.trim()||$("addSel").value);
   if(!code)return msg("เลือกหรือพิมพ์รหัสสินทรัพย์ก่อน","err");
   if(cfg.assets.some(a=>a.symbol===code))return msg(code+" มีอยู่แล้ว","err");
-  cfg.assets.push({symbol:code,label:SYMS[code]||code,enabled:true,timeframes:[15],alerts:{signal:true,tp1:true,tp2:true,tp3:true,sl:true}});
+  cfg.assets.push({symbol:code,label:SYMS[code]||code,enabled:true,timeframes:[15],confirm_tf:0,alerts:{signal:true,tp1:true,tp2:true,tp3:true,sl:true}});
   $("addCode").value="";renderAssets();msg("เพิ่ม "+code+" แล้ว (ค่าเริ่มต้น 15m) — อย่าลืมกดบันทึก","ok");
 }
 let pt=null;function preview(){clearTimeout(pt);pt=setTimeout(async()=>{
@@ -868,7 +981,7 @@ async function refresh(){
   try{const r=await (await fetch("/api/status")).json();
   const rows=Object.values(r.status).sort((a,b)=>(a.label+a.tf).localeCompare(b.label+b.tf));
   $("status").innerHTML=rows.length?`<table><tr><th>สินทรัพย์</th><th>เทรนด์</th><th>เช็กล่าสุด</th></tr>`+rows.map(s=>`<tr><td><b>${esc(s.label)}</b> ${tfName(s.tf)}${s.trade?`<div class="mut">${esc(s.trade)}</div>`:""}</td>
-   <td>${s.error?`<span class="err">${esc(s.error)}</span>`:`<span class="${s.trend}">${s.trend==="UP"?"▲ ขึ้น":"▼ ลง"}</span><div class="mut">${esc(s.close||"")}</div>`}</td>
+   <td>${s.error?`<span class="err">${esc(s.error)}</span>`:`<span class="${s.trend}">${s.trend==="UP"?"▲ ขึ้น":"▼ ลง"}</span><div class="mut">${esc(s.close||"")} · ADX ${esc(s.adx||"-")}</div>`}${s.filtered?`<div class="mut">🧹 ${esc(s.filtered)}</div>`:""}</td>
    <td>${Math.round(r.now-s.checked)} วิ<div class="mut">แท่ง ${esc(s.candle||"-")}</div></td></tr>`).join("")+`</table>`:"รอรอบแรก…";
   $("log").innerHTML=r.log.length?r.log.map(l=>`<div class="prev"><span class="mut">${new Date(l.time*1000).toLocaleString()}</span>\n<b>${esc(l.title)}</b>${esc(l.body)}</div>`).join(""):"ยังไม่มี";
   }catch(e){$("status").innerHTML='<span class="err">ติดต่อบอทไม่ได้ — บอทใน Termux ยังรันอยู่ไหม?</span>'}
@@ -909,7 +1022,7 @@ def run_test(cfg):
             print("  Last signal (history):", title, "|", body.replace("\n", " | "))
     deriv.close()
     n = cfg["notify"]
-    notify(cfg, "🧪 Test: signal bot is working", "If you see this, notifications are set up correctly.",
+    notify(cfg, "🧪 ทดสอบ: บอทแจ้งเตือนทำงานปกติ", "ถ้าเห็นข้อความนี้ แปลว่าตั้งค่าแจ้งเตือนถูกต้องแล้ว",
            n["signal_sound"], "ทดสอบ" if n["tts_lang"] == "th" else "Test")
 
 

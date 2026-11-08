@@ -7,6 +7,7 @@
       "timeframes": [
         1
       ],
+      "confirm_tf": 0,
       "alerts": {
         "signal": true,
         "tp1": true,
@@ -22,6 +23,7 @@
       "timeframes": [
         15
       ],
+      "confirm_tf": 0,
       "alerts": {
         "signal": true,
         "tp1": true,
@@ -37,6 +39,7 @@
       "timeframes": [
         15
       ],
+      "confirm_tf": 0,
       "alerts": {
         "signal": true,
         "tp1": true,
@@ -54,7 +57,11 @@
       1.0,
       2.0,
       3.0
-    ]
+    ],
+    "adx_filter": false,
+    "adx_min": 25.0,
+    "adx_length": 14,
+    "adx_smoothing": 14
   },
   "notify": {
     "termux": true,
