@@ -441,7 +441,8 @@ def signal_message(asset, tf, trade, cfg, late=False):
         if f.get("tp%d" % (k + 1)):
             parts.append(("TP%d" % (k + 1), fmt(tp, trade.get("digits"))))
     if f.get("time"):
-        parts.append(("Time", fmt_time(trade["epoch"] + tf * 60, cfg)))
+        # Candle OPEN time, the same label TradingView shows under each candle.
+        parts.append(("Candle", fmt_time(trade["epoch"], cfg)))
     if n["style"] == "compact":
         body = " | ".join("%s %s" % p for p in parts)
     else:
@@ -769,7 +770,7 @@ details summary{cursor:pointer;font-weight:600}
 <script>
 let cfg=null, SYMS={}, TFS=[];
 const $=id=>document.getElementById(id);
-const FIELDS={entry:"Entry",sl:"SL",risk:"ระยะ SL",tp1:"TP1",tp2:"TP2",tp3:"TP3",time:"เวลา"};
+const FIELDS={entry:"Entry",sl:"SL",risk:"ระยะ SL",tp1:"TP1",tp2:"TP2",tp3:"TP3",time:"เวลาแท่ง"};
 const ALERTS={signal:"BUY/SELL",tp1:"TP1",tp2:"TP2",tp3:"TP3",sl:"SL"};
 const SOUNDS={system:"เสียงแจ้งเตือนของเครื่อง",tts:"พูดออกเสียง (เช่น 'ซื้อ BTCUSD')",file:"ไฟล์เสียงของฉัน",none:"ไม่มีเสียง"};
 const tfName=m=>m<60?m+"m":m<1440?(m/60)+"h":"1D";
