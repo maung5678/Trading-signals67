@@ -3,6 +3,9 @@
 ไฟล์อินดิเคเตอร์: [`indicators/ST_with_TP_SL.pine`](indicators/ST_with_TP_SL.pine)
 (คัดลอกทั้งไฟล์ไปวางใน Pine Editor ของ TradingView แล้วกด **Add to chart**)
 
+EA สำหรับ MT5 (เปิดออเดอร์อัตโนมัติพร้อม SL / TP1–TP3): [`mt5/ST_TP_SL_EA.mq5`](mt5/ST_TP_SL_EA.mq5)
+วิธีติดตั้งและตั้งค่า: [`mt5/README.md`](mt5/README.md)
+
 ## 1. ซ่อน / ย่อ แดชบอร์ด
 
 เปิด **Settings (⚙️) → Inputs → กลุ่ม "Dashboards (hide / compact)"**
