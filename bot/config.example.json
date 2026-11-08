@@ -87,5 +87,16 @@
     "telegram_chat_id": ""
   },
   "poll_seconds": 20,
-  "timezone_offset_hours": 7
+  "candles": 300,
+  "stats_candles": 1000,
+  "timezone_offset_hours": 7,
+  "dashboard_port": 8765,
+  "deriv_app_id": "1089",
+  "deriv_ws_urls": [
+    "wss://red.derivws.com/websockets/v3",
+    "wss://ws.derivws.com/websockets/v3",
+    "wss://green.derivws.com/websockets/v3",
+    "wss://blue.derivws.com/websockets/v3",
+    "wss://ws.binaryws.com/websockets/v3"
+  ]
 }

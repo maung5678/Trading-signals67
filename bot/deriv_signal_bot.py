@@ -89,6 +89,8 @@ DEFAULT_CONFIG = {
     },
     "poll_seconds": 20,
     "candles": 300,
+    # How many candles the win-rate statistics look back over (Deriv allows up to 5000).
+    "stats_candles": 1000,
     "timezone_offset_hours": 7,
     "dashboard_port": 8765,
     "deriv_app_id": "1089",
@@ -251,6 +253,78 @@ def update_trade(trade, candle):
     return events
 
 
+def backtest(candles, direction, atr, strategy, allowed=None, history_size=10):
+    """Win-rate statistics, counted exactly like the indicator's "สถิติย้อนหลัง" table:
+    - TP1 before SL = win (+TP1 R), SL before TP1 = loss (-1R)
+    - an opposite signal before either = closed at that candle's close (win/loss by its real R)
+    - history keeps the best TP reached ("TP2", "TP1→SL", "REV" ...), newest first.
+    `allowed(i, side)` returns False for signals removed by the filters."""
+    rr = strategy["tp_rr"]
+    st = {"signals": 0, "wins": 0, "losses": 0, "profit_r": 0.0}
+    hist = []
+    t = None  # open trade: side, dir, entry, sl, tps, reached, resolved, recorded, epoch
+
+    def record(outcome, r, sl_hit):
+        if not t["recorded"]:
+            hist.insert(0, {"side": t["side"], "outcome": outcome, "r": round(r, 2), "sl": sl_hit, "epoch": t["epoch"]})
+            del hist[history_size:]
+            t["recorded"] = True
+
+    for i, c in enumerate(candles):
+        side = signal_at(direction, i)
+        if side and allowed is not None and not allowed(i, side):
+            side = None
+        if t is not None and t["dir"] != 0:
+            d = t["dir"]
+            sl_hit = c["low"] <= t["sl"] if d == 1 else c["high"] >= t["sl"]
+            # 1) stats: SL first, then TP1
+            if not t["resolved"]:
+                if sl_hit:
+                    st["losses"] += 1
+                    st["profit_r"] -= 1.0
+                    record("SL", -1.0, True)
+                    t["resolved"] = True
+                    t["dir"] = 0
+                elif (c["high"] >= t["tps"][0] if d == 1 else c["low"] <= t["tps"][0]):
+                    st["wins"] += 1
+                    st["profit_r"] += rr[0]
+                    t["resolved"] = True
+            # 2) came back to SL after TP1
+            if t["dir"] != 0 and t["reached"][0] and sl_hit:
+                best = max(k for k in range(3) if t["reached"][k])
+                record("TP%d→SL" % (best + 1), rr[best], True)
+                t["dir"] = 0
+            # 3) mark TPs
+            if t["dir"] != 0:
+                for k in range(3):
+                    if not t["reached"][k] and (c["high"] >= t["tps"][k] if d == 1 else c["low"] <= t["tps"][k]):
+                        t["reached"][k] = True
+                if t["reached"][2]:
+                    record("TP3", rr[2], False)
+        if side and t is not None and t["dir"] != 0:
+            # 4) opposite signal closes the previous trade
+            risk = abs(t["entry"] - t["sl"])
+            rev_r = (c["close"] - t["entry"]) * t["dir"] / risk if risk > 0 else 0.0
+            if not t["resolved"]:
+                st["profit_r"] += rev_r
+                st["wins" if rev_r > 0 else "losses"] += 1
+                t["resolved"] = True
+            best = max([k for k in range(3) if t["reached"][k]] or [-1])
+            record("TP%d" % (best + 1) if best >= 0 else "REV", rr[best] if best >= 0 else rev_r, False)
+        if side:
+            tr = make_trade(side, c, atr[i], strategy)
+            t = {"side": side, "dir": 1 if side == "LONG" else -1, "entry": tr["entry"], "sl": tr["sl"],
+                 "tps": tr["tps"], "reached": [False] * 3, "resolved": False, "recorded": False, "epoch": c["epoch"]}
+            st["signals"] += 1
+    closed = st["wins"] + st["losses"]
+    st["closed"] = closed
+    st["win_rate"] = round(100.0 * st["wins"] / closed, 2) if closed else None
+    st["profit_r"] = round(st["profit_r"], 2)
+    st["history"] = hist
+    st["open"] = t is not None and t["dir"] != 0 and not t["resolved"]
+    return st
+
+
 # ---------------------------------------------------------------------------
 # Config
 # ---------------------------------------------------------------------------
@@ -333,6 +407,7 @@ def normalize_config(raw):
     n["led_color"] = re.sub(r"[^0-9a-fA-F]", "", str(n["led_color"]))[:6] or "00ff00"
     n["vibrate"] = re.sub(r"[^0-9,]", "", str(n["vibrate"]))[:40]
     cfg["poll_seconds"] = min(max(int(cfg["poll_seconds"]), 5), 300)
+    cfg["stats_candles"] = min(max(int(cfg.get("stats_candles", 1000)), 100), 5000)
     cfg["dashboard_port"] = int(cfg["dashboard_port"])
     return cfg
 
@@ -657,6 +732,38 @@ def filter_reasons(deriv, cfg, asset, tf, side, i, candle, adx, cache):
     return reasons
 
 
+STATS_CACHE = {}  # key -> {"candles": [...], "sig": settings signature, "last": epoch}
+
+
+def update_stats(deriv, cfg, asset, tf, candles, shared, cache):
+    """Keep a longer candle history per chart (fetched once, then extended with the
+    regular 300-candle fetch) and recompute the win-rate table when it changes."""
+    key = "%s_%d" % (asset["symbol"], tf)
+    want = cfg["stats_candles"]
+    s = cfg["strategy"]
+    sig = json.dumps([s, asset.get("confirm_tf"), want], sort_keys=True)
+    entry = STATS_CACHE.get(key)
+    if entry is None or entry["want"] != want:
+        entry = {"candles": deriv.closed_candles(asset["symbol"], tf * 60, want), "sig": None, "last": 0, "want": want}
+        STATS_CACHE[key] = entry
+    merged = {c["epoch"]: c for c in entry["candles"]}
+    merged.update({c["epoch"]: c for c in candles})
+    entry["candles"] = [merged[e] for e in sorted(merged)][-want:]
+    c = entry["candles"]
+    if entry["sig"] == sig and entry["last"] == c[-1]["epoch"]:
+        return
+    H, L, C = [x["high"] for x in c], [x["low"] for x in c], [x["close"] for x in c]
+    _, direction, atr = supertrend(H, L, C, s["supertrend_factor"], s["atr_period"])
+    _, _, adx = adx_dmi(H, L, C, s["adx_length"], s["adx_smoothing"])
+    allowed = lambda i, side: not filter_reasons(deriv, cfg, asset, tf, side, i, c[i], adx, cache)
+    res = backtest(c, direction, atr, s, allowed)
+    for h in res["history"]:
+        h["time"] = fmt_time(h.pop("epoch"), cfg)
+    res.update(candles=len(c), since=fmt_time(c[0]["epoch"], cfg), until=fmt_time(c[-1]["epoch"], cfg))
+    entry["sig"], entry["last"] = sig, c[-1]["epoch"]
+    shared.set_status(key, stats=res)
+
+
 def process(deriv, cfg, state, asset, tf, shared=None, cache=None):
     cache = {} if cache is None else cache
     symbol = asset["symbol"]
@@ -679,6 +786,13 @@ def process(deriv, cfg, state, asset, tf, shared=None, cache=None):
                           candle=fmt_time(candles[-1]["epoch"], cfg), close=fmt(closes[-1]),
                           trend="UP" if direction[-1] == -1 else "DOWN", error="",
                           adx="-" if adx[-1] is None else "%.1f" % adx[-1])
+    if shared is not None:
+        try:
+            update_stats(deriv, cfg, asset, tf, candles, shared, cache)
+        except DerivSymbolError:
+            raise
+        except Exception as exc:  # statistics are informational; never stop the alerts
+            print("%s %s: stats error %s" % (time.strftime("%H:%M:%S"), key, exc), flush=True)
     st = state.setdefault(key, {"last_epoch": 0, "trade": None})
     if candles[-1]["epoch"] <= st["last_epoch"]:
         return  # no new closed candle yet
@@ -703,7 +817,8 @@ def process(deriv, cfg, state, asset, tf, shared=None, cache=None):
             reasons = filter_reasons(deriv, cfg, asset, tf, side, i, candle, adx, cache)
             if reasons:
                 msg = "%s %s ถูกกรอง (%s)" % (side_words(side)[0], fmt_time(candle["epoch"], cfg), ", ".join(reasons))
-                print("%s %s: %s" % (time.strftime("%H:%M:%S"), key, msg), flush=True)
+                if not first_run:  # don't list every old filtered signal at startup
+                    print("%s %s: %s" % (time.strftime("%H:%M:%S"), key, msg), flush=True)
                 if shared is not None:
                     shared.set_status(key, filtered=msg)
                 continue
@@ -845,7 +960,10 @@ button{cursor:pointer}.btn{border:0;border-radius:10px;padding:11px 16px;font:in
 .bar{position:fixed;left:0;right:0;bottom:0;background:var(--card);border-top:1px solid var(--line);padding:10px 14px;display:flex;gap:8px}
 .bar .btn{flex:1}.ok{color:var(--up)}.err{color:var(--dn)}
 table{width:100%;border-collapse:collapse;font-size:13px}td,th{text-align:left;padding:5px 4px;border-bottom:1px solid var(--line);vertical-align:top}
-.UP{color:var(--up);font-weight:600}.DOWN{color:var(--dn);font-weight:600}
+.UP{color:var(--up);font-weight:600}
+.sgrid{display:grid;grid-template-columns:repeat(3,1fr);gap:6px;margin:6px 0}.sgrid div{background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:6px;text-align:center}
+.sgrid b{display:block;font-size:17px;color:var(--fg)}.st{border-top:1px solid var(--line);padding:10px 0}.st:first-child{border-top:0;padding-top:0}
+.pos{color:var(--up)!important}.neg{color:var(--dn)!important}.DOWN{color:var(--dn);font-weight:600}
 details summary{cursor:pointer;font-weight:600}
 </style></head><body>
 <h1>⚙️ Signal Bot</h1>
@@ -853,6 +971,12 @@ details summary{cursor:pointer;font-weight:600}
 
 <div class="card"><h2>📊 สถานะ</h2><div id="status" class="mut">-</div>
 <details style="margin-top:10px"><summary>แจ้งเตือนล่าสุด</summary><div id="log" class="mut"></div></details></div>
+
+<div class="card"><h2>🏆 สถิติชนะ/แพ้ (ย้อนหลัง)</h2>
+<div class="mut">นับแบบเดียวกับตาราง "สถิติย้อนหลัง" ในอินดิเคเตอร์ ใช้ค่าและตัวกรองปัจจุบัน:
+ถึง TP1 ก่อน = ชนะ (+TP1 R) · โดน SL ก่อน = แพ้ (−1R) · กลับทิศก่อนรู้ผล = คิดตามกำไร/ขาดทุนจริง ·
+เทรดที่ยังเปิดอยู่ไม่นับ · แตะชื่อเพื่อดูประวัติ 10 เทรดล่าสุด</div>
+<div id="stats" class="mut" style="margin-top:8px">รอรอบแรก…</div></div>
 
 <div class="card"><h2>📈 สินทรัพย์ &amp; ไทม์เฟรม</h2>
 <div class="mut">แตะไทม์เฟรมเพื่อเปิด/ปิด · ติ๊กเลือกว่าจะให้แจ้งอะไรบ้าง</div>
@@ -899,7 +1023,8 @@ details summary{cursor:pointer;font-weight:600}
 <div class="row" style="margin-top:6px"><span>SL = ATR ×</span><input type="number" step="0.1" id="slm"></div>
 <div class="row" style="margin-top:6px"><span>TP1 R</span><input type="number" step="0.1" id="tp1">
 <span>TP2 R</span><input type="number" step="0.1" id="tp2"><span>TP3 R</span><input type="number" step="0.1" id="tp3"></div>
-<div class="row" style="margin-top:6px"><span>เช็กราคาทุก (วินาที)</span><input type="number" id="poll"></div></details></div>
+<div class="row" style="margin-top:6px"><span>เช็กราคาทุก (วินาที)</span><input type="number" id="poll"></div>
+<div class="row" style="margin-top:6px"><span>สถิติย้อนหลัง (แท่ง)</span><input type="number" step="100" id="statsN"><span class="mut">100–5000</span></div></details></div>
 
 <div class="bar"><button class="btn sec" onclick="testN()">🧪 ทดสอบแจ้งเตือน</button><button class="btn" onclick="save()">💾 บันทึก</button></div>
 
@@ -928,7 +1053,7 @@ function fill(){
   $("vib").value=n.vibrate; if($("vib").value!==n.vibrate){$("vib").insertAdjacentHTML("beforeend",`<option value="${esc(n.vibrate)}">${esc(n.vibrate)}</option>`);$("vib").value=n.vibrate}
   $("tgToken").value=n.telegram_bot_token;$("tgChat").value=n.telegram_chat_id;$("termux").checked=n.termux;
   $("factor").value=s.supertrend_factor;$("atr").value=s.atr_period;$("slm").value=s.sl_atr_mult;
-  [1,2,3].forEach(i=>$("tp"+i).value=s.tp_rr[i-1]);$("poll").value=cfg.poll_seconds;
+  [1,2,3].forEach(i=>$("tp"+i).value=s.tp_rr[i-1]);$("poll").value=cfg.poll_seconds;$("statsN").value=cfg.stats_candles;
   $("adxF").checked=s.adx_filter;$("adxMin").value=s.adx_min;
   document.querySelectorAll("input,select").forEach(e=>{if(!e.dataset.bound){e.dataset.bound=1;e.addEventListener("change",sync)}});
   preview();
@@ -941,7 +1066,7 @@ function sync(){
   n.signal_sound=$("sigSound").value;n.tpsl_sound=$("tpsSound").value;n.tts_lang=$("tts").value;n.sound_file=$("sfile").value.trim();
   n.vibrate=$("vib").value;n.telegram_bot_token=$("tgToken").value.trim();n.telegram_chat_id=$("tgChat").value.trim();n.termux=$("termux").checked;
   s.supertrend_factor=+$("factor").value;s.atr_period=+$("atr").value;s.sl_atr_mult=+$("slm").value;
-  s.tp_rr=[1,2,3].map(i=>+$("tp"+i).value);cfg.poll_seconds=+$("poll").value;
+  s.tp_rr=[1,2,3].map(i=>+$("tp"+i).value);cfg.poll_seconds=+$("poll").value;cfg.stats_candles=+$("statsN").value;
   s.adx_filter=$("adxF").checked;s.adx_min=+$("adxMin").value;
   preview();
 }
@@ -977,12 +1102,25 @@ async function save(){
   cfg=j.config;fill();renderAssets();msg("✅ บันทึกแล้ว "+new Date().toLocaleTimeString(),"ok");refresh();
 }
 async function testN(){await fetch("/api/test",{method:"POST",body:JSON.stringify(cfg)});msg("ส่งแจ้งเตือนทดสอบแล้ว (ใช้ค่าบนหน้านี้ ยังไม่ได้บันทึก)","ok");setTimeout(refresh,800)}
+const OUT={SL:"โดน SL",REV:"กลับทิศ"};
+const sideTh=s=>s==="LONG"?'<span class="UP">BUY</span>':'<span class="DOWN">SELL</span>';
+function statsHtml(s){const x=s.stats,cls=v=>v>0?"pos":v<0?"neg":"";
+  const wr=x.win_rate===null?"-":x.win_rate.toFixed(2)+" %";
+  return `<div class="st"><details><summary>${esc(s.label)} ${tfName(s.tf)}
+  <span class="mut" style="font-weight:400">· ${x.candles} แท่ง (${esc(x.since)} – ${esc(x.until)})</span></summary>
+  <table style="margin-top:6px"><tr><th>#</th><th>ฝั่ง</th><th>ผล</th><th>R</th><th>โดน SL</th><th>เวลาเข้า</th></tr>
+  ${x.history.map((h,i)=>`<tr><td>${i+1}</td><td>${sideTh(h.side)}</td><td>${esc(OUT[h.outcome]||h.outcome)}</td>
+  <td class="${cls(h.r)}">${h.r>0?"+":""}${h.r.toFixed(2)}</td><td>${h.sl?"ใช่":"ไม่"}</td><td>${esc(h.time)}</td></tr>`).join("")||'<tr><td colspan="6">ยังไม่มีเทรด</td></tr>'}</table></details>
+  <div class="sgrid"><div>สัญญาณ<b>${x.signals}</b></div><div>รู้ผลแล้ว<b>${x.closed}</b></div><div>อัตราชนะ<b>${wr}</b></div>
+  <div>ชนะ<b class="pos">${x.wins}</b></div><div>แพ้<b class="neg">${x.losses}</b></div><div>กำไร<b class="${cls(x.profit_r)}">${x.profit_r>0?"+":""}${x.profit_r.toFixed(2)} R</b></div></div>
+  ${x.open?'<div class="mut">+ มี 1 เทรดที่ยังเปิดอยู่ (ยังไม่นับ)</div>':""}</div>`}
 async function refresh(){
   try{const r=await (await fetch("/api/status")).json();
   const rows=Object.values(r.status).sort((a,b)=>(a.label+a.tf).localeCompare(b.label+b.tf));
   $("status").innerHTML=rows.length?`<table><tr><th>สินทรัพย์</th><th>เทรนด์</th><th>เช็กล่าสุด</th></tr>`+rows.map(s=>`<tr><td><b>${esc(s.label)}</b> ${tfName(s.tf)}${s.trade?`<div class="mut">${esc(s.trade)}</div>`:""}</td>
    <td>${s.error?`<span class="err">${esc(s.error)}</span>`:`<span class="${s.trend}">${s.trend==="UP"?"▲ ขึ้น":"▼ ลง"}</span><div class="mut">${esc(s.close||"")} · ADX ${esc(s.adx||"-")}</div>`}${s.filtered?`<div class="mut">🧹 ${esc(s.filtered)}</div>`:""}</td>
    <td>${Math.round(r.now-s.checked)} วิ<div class="mut">แท่ง ${esc(s.candle||"-")}</div></td></tr>`).join("")+`</table>`:"รอรอบแรก…";
+  $("stats").innerHTML=rows.filter(s=>s.stats).map(statsHtml).join("")||"รอรอบแรก…";
   $("log").innerHTML=r.log.length?r.log.map(l=>`<div class="prev"><span class="mut">${new Date(l.time*1000).toLocaleString()}</span>\n<b>${esc(l.title)}</b>${esc(l.body)}</div>`).join(""):"ยังไม่มี";
   }catch(e){$("status").innerHTML='<span class="err">ติดต่อบอทไม่ได้ — บอทใน Termux ยังรันอยู่ไหม?</span>'}
 }
