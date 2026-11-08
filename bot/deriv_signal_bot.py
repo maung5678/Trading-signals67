@@ -469,6 +469,23 @@ def event_message(asset, tf, trade, event, cfg, hit_epoch=None):
     return title, body
 
 
+def previous_trade_note(prev, events, price):
+    """What to do with the earlier trade when a new signal arrives."""
+    if prev is None:
+        return ""
+    buy_sell = side_words(prev["side"])[0]
+    d = prev.get("digits")
+    if "SL" in events:
+        return "⚠️ Previous %s hit SL %s (-1R)" % (buy_sell, fmt(prev["sl"], d))
+    if prev["closed"] and not events:
+        return ""  # finished earlier (TP3 or SL), already notified
+    risk = abs(prev["entry"] - prev["sl"]) or 1e-9
+    sign = 1 if prev["side"] == "LONG" else -1
+    r = (price - prev["entry"]) * sign / risk
+    prev["closed"] = True
+    return "⚠️ Close previous %s (entry %s) now at %s (%+.1fR)" % (buy_sell, fmt(prev["entry"], d), fmt(price, d), r)
+
+
 def speech_text(asset, tf, kind, cfg):
     th = cfg["notify"]["tts_lang"] == "th"
     if kind in ("LONG", "SHORT"):
@@ -578,18 +595,24 @@ def process(deriv, cfg, state, asset, tf, shared=None):
         if candle["epoch"] <= st["last_epoch"]:
             continue
         side = signal_at(direction, i)
+        prev = st["trade"]
+        events = []
+        if not first_run:
+            # Check the open trade FIRST, also on a candle that flips the signal,
+            # so an SL/TP hit on the reversal candle is never skipped.
+            events = update_trade(prev, candle)
+            for ev in events:
+                if alerts.get(ev.lower()):
+                    title, body = event_message(asset, tf, prev, ev, cfg, candle["epoch"])
+                    notify(cfg, title, body, n["tpsl_sound"], speech_text(asset, tf, ev, cfg), symbol, shared)
         if side:
             st["trade"] = make_trade(side, candle, atr[i], strategy, digits)
             if not first_run and alerts["signal"]:
                 title, body = signal_message(asset, tf, st["trade"], cfg, late=i < len(candles) - 1)
+                note = previous_trade_note(prev, events, candle["close"])
+                if note:
+                    body += "\n" + note
                 notify(cfg, title, body, n["signal_sound"], speech_text(asset, tf, side, cfg), symbol, shared)
-            continue
-        if first_run:
-            continue
-        for ev in update_trade(st["trade"], candle):
-            if alerts.get(ev.lower()):
-                title, body = event_message(asset, tf, st["trade"], ev, cfg, candle["epoch"])
-                notify(cfg, title, body, n["tpsl_sound"], speech_text(asset, tf, ev, cfg), symbol, shared)
     st["last_epoch"] = candles[-1]["epoch"]
     if shared is not None and st.get("trade"):
         t = st["trade"]
