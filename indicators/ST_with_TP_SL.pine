@@ -3,79 +3,81 @@
 indicator("Supertrend TP/SL + Alerts v2", "ST Alerts v2", overlay = true, max_boxes_count = 20, max_lines_count = 20, max_labels_count = 50)
 
 // --- Input groups ---
-string CALCULATION_GROUP = "Calculation"
-string DISPLAY_GROUP = "Display"
-string TRADE_LEVEL_GROUP = "Trade levels"
-string STYLE_GROUP = "Style"
-string DASHBOARD_GROUP = "Dashboards (hide / compact)"
-string NOTIFY_GROUP = "Notifications (LINE / Telegram)"
-string MODE_FULL = "Full"
-string MODE_COMPACT = "Compact"
-string MODE_HIDDEN = "Hidden"
+string CALCULATION_GROUP = "การคำนวณ"
+string DISPLAY_GROUP = "การแสดงผลบนกราฟ"
+string FILTER_GROUP = "ตัวกรองสัญญาณ"
+string TRADE_LEVEL_GROUP = "จุด SL / TP"
+string STYLE_GROUP = "สี"
+string DASHBOARD_GROUP = "แดชบอร์ด (ซ่อน / ย่อ)"
+string NOTIFY_GROUP = "การแจ้งเตือน"
+string MODE_FULL = "เต็ม"
+string MODE_COMPACT = "ย่อ"
+string MODE_HIDDEN = "ซ่อน"
 
 // --- Inputs ---
-factorInput = input.float(2.5, "Factor", minval = 0.01, step = 0.01, tooltip = "Multiplier for the ATR-based Supertrend distance.", group = CALCULATION_GROUP)
-atrPeriodInput = input.int(14, "ATR period", minval = 1, tooltip = "Number of bars used to calculate ATR.", group = CALCULATION_GROUP)
-showSignalsInput = input.bool(true, "Show signals", tooltip = "Displays buy and sell signals when the Supertrend direction changes.", group = DISPLAY_GROUP)
-onlyStrongAdxSignalsInput = input.bool(false, "Only signal when ADX is strong", tooltip = "When enabled, BUY and SELL signals appear only when ADX is above the selected threshold.", group = DISPLAY_GROUP)
-useEma200FilterInput = input.bool(false, "EMA 200 direction filter", tooltip = "Allows long signals only above EMA 200 and short signals only below EMA 200.", group = DISPLAY_GROUP)
-showFillInput = input.bool(true, "Fill trend area", tooltip = "Fills the area between price and the Supertrend with the trend color.", group = DISPLAY_GROUP)
-showLevelsInput = input.bool(true, "Show Entry, TP1, TP2, TP3 and SL", tooltip = "Displays the latest setup's entry, take-profit and stop-loss lines.", group = DISPLAY_GROUP)
-showBoxesInput = input.bool(true, "Show trade zones", tooltip = "Displays profit and loss zones extending to the right of the chart.", group = DISPLAY_GROUP)
-showTpMarksInput = input.bool(true, "Mark reached take-profits", tooltip = "Marks TP1, TP2 and TP3 when price reaches each level.", group = DISPLAY_GROUP)
-showPriceLabelsInput = input.bool(true, "Show price labels", tooltip = "Displays exact setup prices in labels to the right of the chart.", group = DISPLAY_GROUP)
-priceLabelOffsetInput = input.int(15, "Price-label offset", minval = 0, maxval = 500, tooltip = "Number of bars to offset Entry, TP and SL labels to the right.", group = DISPLAY_GROUP)
-showCandleColorsInput = input.bool(true, "Color candles by trend", tooltip = "Colors candles according to the current Supertrend direction.", group = DISPLAY_GROUP)
-showKeyLevelsInput = input.bool(false, "Show key support/resistance levels", tooltip = "Automatically groups pivot levels into horizontal support and resistance levels.", group = DISPLAY_GROUP)
-showTrendLinesInput = input.bool(true, "Show Supertrend lines", tooltip = "Displays the bullish and bearish Supertrend lines.", group = DISPLAY_GROUP)
-showDiagonalTrendLinesInput = input.bool(false, "Show diagonal trendlines", tooltip = "Displays the latest confirmed diagonal support and resistance lines based on pivot points.", group = DISPLAY_GROUP)
-showOnlyCurrentSlopeInput = input.bool(true, "Show only the current slope", tooltip = "In an uptrend, show only rising support; in a downtrend, show only falling resistance.", group = DISPLAY_GROUP)
-showChannelInput = input.bool(false, "Show trend channel", tooltip = "Automatically draws a parallel trend channel from confirmed pivot points.", group = DISPLAY_GROUP)
-showBreakoutSignalsInput = input.bool(false, "Show trendline/channel breakout signals", tooltip = "Creates a BUY or SELL signal when a confirmed candle closes through a diagonal trendline or channel.", group = DISPLAY_GROUP)
-enableTp3ReentryInput = input.bool(false, "Enable Supertrend re-entry", tooltip = "After TP3, looks for a pullback to the Supertrend followed by confirmation in the trend direction.", group = DISPLAY_GROUP)
-enableEmaReentryInput = input.bool(false, "Enable EMA re-entry", tooltip = "After TP3, looks for a pullback across the EMA and a recross in the trend direction.", group = DISPLAY_GROUP)
-enableAggressiveEmaReentryInput = input.bool(false, "Enable aggressive EMA re-entry", tooltip = "After TP3, allows re-entry on an EMA touch and close back in the trend direction without waiting for a prior close across the EMA.", group = DISPLAY_GROUP)
-confirmedSignalsOnlyInput = input.bool(true, "Signals only on closed candles", tooltip = "Waits for the candle to close before showing BUY/SELL and setting Entry/SL/TP, so signals never move or disappear (same as the signal bot). Turn off to see signals form on the live candle.", group = DISPLAY_GROUP)
-emaReentryLengthInput = input.int(13, "Re-entry EMA length", options = [13, 9, 5], tooltip = "EMA length used for optional pullback re-entry after TP3.", group = CALCULATION_GROUP)
-pivotLengthInput = input.int(5, "Pivot length", minval = 1, maxval = 50, tooltip = "Number of bars to the left and right required to confirm a swing high or swing low.", group = CALCULATION_GROUP)
-keyLevelsCountInput = input.int(3, "Number of key levels", minval = 1, maxval = 5, tooltip = "Maximum number of support and resistance levels on each side.", group = CALCULATION_GROUP)
-keyLevelToleranceAtrInput = input.float(0.5, "Level tolerance (ATR)", minval = 0.1, maxval = 3.0, step = 0.1, tooltip = "Pivot levels within this ATR distance are merged into one key level.", group = CALCULATION_GROUP)
-adxLengthInput = input.int(14, "ADX DI length", minval = 1, tooltip = "Length used to calculate positive and negative directional movement.", group = CALCULATION_GROUP)
-adxSmoothingInput = input.int(14, "ADX smoothing", minval = 1, tooltip = "Smoothing length for ADX.", group = CALCULATION_GROUP)
-adxRangeThresholdInput = input.float(20.0, "ADX range threshold", minval = 1.0, step = 0.5, tooltip = "Below this value, the market is classified as ranging.", group = CALCULATION_GROUP)
-adxStrongThresholdInput = input.float(25.0, "ADX trend threshold", minval = 1.0, step = 0.5, tooltip = "At or above this value, the trend is considered strong.", group = CALCULATION_GROUP)
-signalAdxThresholdInput = input.float(50.0, "Signal ADX threshold", minval = 1.0, maxval = 100.0, step = 0.5, tooltip = "When the ADX signal filter is enabled, signals must have ADX above this value.", group = CALCULATION_GROUP)
-neutralZoneHalfWidthInput = input.float(10.0, "Neutral zone ±", minval = 0.0, maxval = 49.0, step = 0.5, tooltip = "Half-width of the neutral zone around 50 in the multi-timeframe dashboard.", group = CALCULATION_GROUP)
-slAtrMultiplierInput = input.float(1.5, "Stop-loss ATR multiplier", minval = 0.1, step = 0.1, tooltip = "ATR distance from the entry used to calculate the stop loss.", group = TRADE_LEVEL_GROUP)
-tp1RiskRewardInput = input.float(1.0, "TP1 risk/reward", minval = 0.1, step = 0.1, tooltip = "TP1 distance as a multiple of the stop-loss risk.", group = TRADE_LEVEL_GROUP)
-tp2RiskRewardInput = input.float(2.0, "TP2 risk/reward", minval = 0.1, step = 0.1, tooltip = "TP2 distance as a multiple of the stop-loss risk.", group = TRADE_LEVEL_GROUP)
-tp3RiskRewardInput = input.float(3.0, "TP3 risk/reward", minval = 0.1, step = 0.1, tooltip = "TP3 distance as a multiple of the stop-loss risk.", group = TRADE_LEVEL_GROUP)
-upColorInput = input.color(#089981, "Uptrend", tooltip = "Color used for the Supertrend during an uptrend.", group = STYLE_GROUP)
-downColorInput = input.color(#f23645, "Downtrend", tooltip = "Color used for the Supertrend during a downtrend.", group = STYLE_GROUP)
-entryColorInput = input.color(#5b9cf6, "Entry", tooltip = "Color of the entry level.", group = STYLE_GROUP)
-takeProfit1ColorInput = input.color(#26a69a, "TP1", tooltip = "Color of the first take-profit level.", group = STYLE_GROUP)
-takeProfit2ColorInput = input.color(#089981, "TP2", tooltip = "Color of the second take-profit level.", group = STYLE_GROUP)
-takeProfit3ColorInput = input.color(#00695c, "TP3", tooltip = "Color of the third take-profit level.", group = STYLE_GROUP)
-stopLossColorInput = input.color(#f23645, "Stop loss", tooltip = "Color of the stop-loss level.", group = STYLE_GROUP)
-candleUpColorInput = input.color(#00ff00, "Bullish candles", tooltip = "Candle color during an uptrend.", group = STYLE_GROUP)
-candleDownColorInput = input.color(#ff0000, "Bearish candles", tooltip = "Candle color during a downtrend.", group = STYLE_GROUP)
-candleTransparencyInput = input.int(0, "Candle transparency", minval = 0, maxval = 100, tooltip = "Transparency of trend-colored candles. 0 is fully opaque.", group = STYLE_GROUP)
-supportTrendLineColorInput = input.color(#089981, "Support trendline", tooltip = "Color of the diagonal support line.", group = STYLE_GROUP)
-resistanceTrendLineColorInput = input.color(#f23645, "Resistance trendline", tooltip = "Color of the diagonal resistance line.", group = STYLE_GROUP)
-channelColorInput = input.color(#5b9cf6, "Trend channel", tooltip = "Color of the upper and lower channel lines.", group = STYLE_GROUP)
-channelFillTransparencyInput = input.int(94, "Channel fill transparency", minval = 0, maxval = 100, tooltip = "Transparency of the area inside the trend channel.", group = STYLE_GROUP)
+factorInput = input.float(2.5, "Factor (ตัวคูณ Supertrend)", minval = 0.01, step = 0.01, tooltip = "ระยะเส้น Supertrend = ATR × ค่านี้ · ค่ามาก = สัญญาณน้อยลงแต่ช้าลง · ค่าน้อย = สัญญาณถี่ขึ้น", group = CALCULATION_GROUP)
+atrPeriodInput = input.int(14, "ATR (จำนวนแท่ง)", minval = 1, tooltip = "จำนวนแท่งที่ใช้วัดความผันผวนเฉลี่ย (ATR) ใช้ทั้ง Supertrend และระยะ SL", group = CALCULATION_GROUP)
+showSignalsInput = input.bool(true, "แสดงป้าย BUY / SELL", tooltip = "แสดงป้ายเมื่อ Supertrend เปลี่ยนทิศ", group = DISPLAY_GROUP)
+confirmedSignalsOnlyInput = input.bool(true, "สัญญาณเฉพาะแท่งที่ปิดแล้ว", tooltip = "รอแท่งปิดก่อนค่อยขึ้น BUY/SELL และกำหนด Entry/SL/TP ป้ายจะไม่เลื่อนหรือหาย (ตรงกับบอทแจ้งเตือน) · ปิดไว้ = เห็นสัญญาณก่อนแท่งปิดแต่อาจเปลี่ยนได้", group = DISPLAY_GROUP)
+showFillInput = input.bool(true, "ระบายสีพื้นที่เทรนด์", tooltip = "ระบายสีระหว่างราคากับเส้น Supertrend", group = DISPLAY_GROUP)
+showLevelsInput = input.bool(true, "แสดงเส้น Entry, TP1–TP3, SL", tooltip = "เส้นประของเทรดล่าสุด", group = DISPLAY_GROUP)
+showBoxesInput = input.bool(true, "แสดงโซนกำไร / ขาดทุน", tooltip = "กล่องสีเขียว (TP) และแดง (SL) ยื่นไปทางขวา", group = DISPLAY_GROUP)
+showTpMarksInput = input.bool(true, "ติดป้าย ✓ เมื่อถึง TP", tooltip = "ขึ้น ✓ TP1 / TP2 / TP3 บนแท่งที่ราคาไปถึง", group = DISPLAY_GROUP)
+showPriceLabelsInput = input.bool(true, "แสดงป้ายราคา", tooltip = "ป้ายราคา Entry / TP / SL ด้านขวาของกราฟ", group = DISPLAY_GROUP)
+priceLabelOffsetInput = input.int(15, "ระยะป้ายราคา (แท่ง)", minval = 0, maxval = 500, tooltip = "เลื่อนป้ายราคาไปทางขวากี่แท่ง", group = DISPLAY_GROUP)
+showCandleColorsInput = input.bool(true, "ระบายสีแท่งเทียนตามเทรนด์", tooltip = "เขียว = ขาขึ้น, แดง = ขาลง", group = DISPLAY_GROUP)
+showTrendLinesInput = input.bool(true, "แสดงเส้น Supertrend", group = DISPLAY_GROUP)
+showKeyLevelsInput = input.bool(false, "แสดงแนวรับ / แนวต้านแนวนอน", tooltip = "รวมจุดกลับตัว (pivot) ที่ราคาใกล้กันเป็นเส้นแนวรับ/แนวต้าน", group = DISPLAY_GROUP)
+showDiagonalTrendLinesInput = input.bool(false, "แสดงเส้นเทรนด์ไลน์ทแยง", tooltip = "ลากจาก 2 จุดกลับตัวล่าสุด", group = DISPLAY_GROUP)
+showOnlyCurrentSlopeInput = input.bool(true, "เฉพาะเส้นที่ตรงกับเทรนด์", tooltip = "ขาขึ้นแสดงแค่เส้นรับที่ชันขึ้น ขาลงแสดงแค่เส้นต้านที่ชันลง", group = DISPLAY_GROUP)
+showChannelInput = input.bool(false, "แสดงกรอบราคา (Channel)", tooltip = "กรอบเส้นคู่ขนานจากจุดกลับตัว", group = DISPLAY_GROUP)
+showBreakoutSignalsInput = input.bool(false, "สัญญาณเบรกเทรนด์ไลน์ / กรอบ", tooltip = "เพิ่ม BUY/SELL เมื่อแท่งปิดทะลุเทรนด์ไลน์หรือกรอบ (บอทแจ้งเตือนยังไม่รองรับ)", group = DISPLAY_GROUP)
+enableTp3ReentryInput = input.bool(false, "เข้าซ้ำหลัง TP3 (ย่อมาแตะ Supertrend)", tooltip = "หลังถึง TP3 รอราคาย่อมาแตะเส้น Supertrend แล้วปิดกลับตามเทรนด์ (บอทแจ้งเตือนยังไม่รองรับ)", group = DISPLAY_GROUP)
+enableEmaReentryInput = input.bool(false, "เข้าซ้ำหลัง TP3 (ตัด EMA)", tooltip = "หลังถึง TP3 รอราคาตัดลงใต้ EMA แล้วตัดกลับขึ้น (ขาขึ้น) หรือกลับกัน (บอทแจ้งเตือนยังไม่รองรับ)", group = DISPLAY_GROUP)
+enableAggressiveEmaReentryInput = input.bool(false, "เข้าซ้ำหลัง TP3 (แตะ EMA แบบเร็ว)", tooltip = "แค่แตะ EMA แล้วปิดกลับตามเทรนด์ก็เข้า ไม่ต้องรอตัดก่อน (บอทแจ้งเตือนยังไม่รองรับ)", group = DISPLAY_GROUP)
+onlyStrongAdxSignalsInput = input.bool(false, "สัญญาณเฉพาะตอน ADX แรง", tooltip = "ตัดสัญญาณตอนตลาดไซด์เวย์ทิ้ง ขึ้น BUY/SELL เฉพาะตอน ADX สูงกว่า 'เกณฑ์ ADX ของสัญญาณ' (ตั้งให้ตรงกับบอท)", group = FILTER_GROUP)
+signalAdxThresholdInput = input.float(25.0, "เกณฑ์ ADX ของสัญญาณ", minval = 1.0, maxval = 100.0, step = 0.5, tooltip = "ใช้เมื่อเปิด 'สัญญาณเฉพาะตอน ADX แรง' · 25 = เริ่มมีเทรนด์ · ยิ่งสูงยิ่งเข้มงวด", group = FILTER_GROUP)
+htfFilterInput = input.timeframe("", "กรองด้วยเทรนด์ TF ใหญ่", tooltip = "ว่าง = ไม่ใช้ · เลือก TF ที่ใหญ่กว่ากราฟ เช่น กราฟ 1m เลือก 15m → BUY เฉพาะตอน Supertrend ของ 15m (แท่งที่ปิดแล้ว) เป็นขาขึ้น, SELL เฉพาะขาลง (ตั้งให้ตรงกับบอท)", group = FILTER_GROUP)
+useEma200FilterInput = input.bool(false, "กรองด้วย EMA 200", tooltip = "BUY เฉพาะราคาอยู่เหนือ EMA 200, SELL เฉพาะใต้ EMA 200 (บอทแจ้งเตือนยังไม่รองรับ)", group = FILTER_GROUP)
+emaReentryLengthInput = input.int(13, "EMA สำหรับเข้าซ้ำ", options = [13, 9, 5], tooltip = "ความยาว EMA ที่ใช้กับการเข้าซ้ำหลัง TP3", group = CALCULATION_GROUP)
+pivotLengthInput = input.int(5, "ความยาว Pivot", minval = 1, maxval = 50, tooltip = "จำนวนแท่งซ้าย/ขวาที่ใช้ยืนยันจุดกลับตัว", group = CALCULATION_GROUP)
+keyLevelsCountInput = input.int(3, "จำนวนแนวรับ/แนวต้าน", minval = 1, maxval = 5, tooltip = "สูงสุดกี่เส้นต่อฝั่ง", group = CALCULATION_GROUP)
+keyLevelToleranceAtrInput = input.float(0.5, "ระยะรวมแนว (× ATR)", minval = 0.1, maxval = 3.0, step = 0.1, tooltip = "จุดกลับตัวที่ห่างกันไม่เกินระยะนี้จะรวมเป็นเส้นเดียว", group = CALCULATION_GROUP)
+adxLengthInput = input.int(14, "ADX: ความยาว DI", minval = 1, tooltip = "จำนวนแท่งที่ใช้คำนวณแรงซื้อ (+DI) / แรงขาย (−DI)", group = CALCULATION_GROUP)
+adxSmoothingInput = input.int(14, "ADX: การปรับเรียบ", minval = 1, tooltip = "จำนวนแท่งที่ใช้เฉลี่ยค่า ADX", group = CALCULATION_GROUP)
+adxRangeThresholdInput = input.float(20.0, "ADX ต่ำกว่านี้ = ไซด์เวย์", minval = 1.0, step = 0.5, tooltip = "ใช้กับแดชบอร์ด ADX และคะแนน Multi-timeframe", group = CALCULATION_GROUP)
+adxStrongThresholdInput = input.float(25.0, "ADX ตั้งแต่นี้ = เทรนด์แรง", minval = 1.0, step = 0.5, tooltip = "ใช้กับแดชบอร์ด ADX (สภาวะตลาด / ตัวกรอง)", group = CALCULATION_GROUP)
+neutralZoneHalfWidthInput = input.float(10.0, "โซนกลาง ± (Multi-timeframe)", minval = 0.0, maxval = 49.0, step = 0.5, tooltip = "คะแนนอยู่ใน 50 ± ค่านี้ = กลาง (ไม่ชัดเจน)", group = CALCULATION_GROUP)
+slAtrMultiplierInput = input.float(1.5, "SL = ATR ×", minval = 0.1, step = 0.1, tooltip = "ระยะ SL จากจุดเข้า = ATR × ค่านี้ (เรียกระยะนี้ว่า 1R)", group = TRADE_LEVEL_GROUP)
+tp1RiskRewardInput = input.float(1.0, "TP1 (R)", minval = 0.1, step = 0.1, tooltip = "ระยะ TP1 = ระยะ SL × ค่านี้", group = TRADE_LEVEL_GROUP)
+tp2RiskRewardInput = input.float(2.0, "TP2 (R)", minval = 0.1, step = 0.1, tooltip = "ระยะ TP2 = ระยะ SL × ค่านี้", group = TRADE_LEVEL_GROUP)
+tp3RiskRewardInput = input.float(3.0, "TP3 (R)", minval = 0.1, step = 0.1, tooltip = "ระยะ TP3 = ระยะ SL × ค่านี้", group = TRADE_LEVEL_GROUP)
+upColorInput = input.color(#089981, "ขาขึ้น", group = STYLE_GROUP)
+downColorInput = input.color(#f23645, "ขาลง", group = STYLE_GROUP)
+entryColorInput = input.color(#5b9cf6, "Entry", group = STYLE_GROUP)
+takeProfit1ColorInput = input.color(#26a69a, "TP1", group = STYLE_GROUP)
+takeProfit2ColorInput = input.color(#089981, "TP2", group = STYLE_GROUP)
+takeProfit3ColorInput = input.color(#00695c, "TP3", group = STYLE_GROUP)
+stopLossColorInput = input.color(#f23645, "SL", group = STYLE_GROUP)
+candleUpColorInput = input.color(#00ff00, "แท่งเทียนขาขึ้น", group = STYLE_GROUP)
+candleDownColorInput = input.color(#ff0000, "แท่งเทียนขาลง", group = STYLE_GROUP)
+candleTransparencyInput = input.int(0, "ความโปร่งใสแท่งเทียน", minval = 0, maxval = 100, tooltip = "0 = ทึบ, 100 = มองไม่เห็น", group = STYLE_GROUP)
+supportTrendLineColorInput = input.color(#089981, "เส้นแนวรับ", group = STYLE_GROUP)
+resistanceTrendLineColorInput = input.color(#f23645, "เส้นแนวต้าน", group = STYLE_GROUP)
+channelColorInput = input.color(#5b9cf6, "กรอบราคา", group = STYLE_GROUP)
+channelFillTransparencyInput = input.int(94, "ความโปร่งใสในกรอบ", minval = 0, maxval = 100, group = STYLE_GROUP)
 
 // --- Dashboard inputs ---
-hideAllDashboardsInput = input.bool(false, "Hide ALL dashboards", tooltip = "Master switch. When enabled, every table on the chart is hidden regardless of the settings below.", group = DASHBOARD_GROUP)
-showTelegramBannerInput = input.bool(false, "Show Telegram banner", tooltip = "Shows the 'Join Telegram' banner at the top of the chart.", group = DASHBOARD_GROUP)
-dashboardTextSizeInput = input.string(size.small, "Dashboard text size", options = [size.tiny, size.small, size.normal], group = DASHBOARD_GROUP)
-statsModeInput = input.string(MODE_COMPACT, "Win-rate statistics", options = [MODE_FULL, MODE_COMPACT, MODE_HIDDEN], inline = "stats", tooltip = "Full = all rows, Compact = win rate and profit only, Hidden = off.", group = DASHBOARD_GROUP)
+hideAllDashboardsInput = input.bool(false, "ซ่อนแดชบอร์ดทั้งหมด", tooltip = "สวิตช์หลัก ติ๊กแล้วซ่อนทุกตาราง", group = DASHBOARD_GROUP)
+showTelegramBannerInput = input.bool(false, "แสดงแบนเนอร์ Telegram", tooltip = "แบนเนอร์โฆษณาของผู้เขียนต้นฉบับ ไม่เกี่ยวกับการคำนวณ", group = DASHBOARD_GROUP)
+dashboardTextSizeInput = input.string(size.tiny, "ขนาดตัวอักษร", options = [size.tiny, size.small, size.normal], tooltip = "tiny เหมาะกับมือถือ", group = DASHBOARD_GROUP)
+statsModeInput = input.string(MODE_COMPACT, "สถิติชนะ/แพ้", options = [MODE_FULL, MODE_COMPACT, MODE_HIDDEN], inline = "stats", tooltip = "สถิติย้อนหลังของสัญญาณบนกราฟนี้ · ย่อ = อัตราชนะ + กำไร (R)", group = DASHBOARD_GROUP)
 statsPositionInput = input.string(position.top_right, "", options = [position.top_left, position.top_center, position.top_right, position.middle_left, position.middle_right, position.bottom_left, position.bottom_center, position.bottom_right], inline = "stats", group = DASHBOARD_GROUP)
-adxModeInput = input.string(MODE_COMPACT, "ADX dashboard", options = [MODE_FULL, MODE_COMPACT, MODE_HIDDEN], inline = "adx", tooltip = "Full = all rows, Compact = ADX value and filter only, Hidden = off.", group = DASHBOARD_GROUP)
+adxModeInput = input.string(MODE_COMPACT, "แดชบอร์ด ADX", options = [MODE_FULL, MODE_COMPACT, MODE_HIDDEN], inline = "adx", tooltip = "บอกว่าตลาดมีเทรนด์แรงไหม · ย่อ = ค่า ADX + สถานะเข้าได้/รอ", group = DASHBOARD_GROUP)
 adxPositionInput = input.string(position.middle_right, "", options = [position.top_left, position.top_center, position.top_right, position.middle_left, position.middle_right, position.bottom_left, position.bottom_center, position.bottom_right], inline = "adx", group = DASHBOARD_GROUP)
-mtfModeInput = input.string(MODE_COMPACT, "Multi-timeframe dashboard", options = [MODE_FULL, MODE_COMPACT, MODE_HIDDEN], inline = "mtf", tooltip = "Full = score table, Compact = one row of arrows (▲ bullish, ▼ bearish, • neutral), Hidden = off.", group = DASHBOARD_GROUP)
+mtfModeInput = input.string(MODE_COMPACT, "เทรนด์หลายไทม์เฟรม", options = [MODE_FULL, MODE_COMPACT, MODE_HIDDEN], inline = "mtf", tooltip = "เทรนด์ของ 5m/15m/1h/4h/1D · ย่อ = ลูกศร ▲ ขึ้น ▼ ลง • กลาง", group = DASHBOARD_GROUP)
 mtfPositionInput = input.string(position.bottom_right, "", options = [position.top_left, position.top_center, position.top_right, position.middle_left, position.middle_right, position.bottom_left, position.bottom_center, position.bottom_right], inline = "mtf", group = DASHBOARD_GROUP)
-historyModeInput = input.string(MODE_HIDDEN, "Trade history", options = [MODE_FULL, MODE_COMPACT, MODE_HIDDEN], inline = "hist", tooltip = "Full = last 10 trades, Compact = last 3 trades, Hidden = off.", group = DASHBOARD_GROUP)
+historyModeInput = input.string(MODE_HIDDEN, "ประวัติเทรด", options = [MODE_FULL, MODE_COMPACT, MODE_HIDDEN], inline = "hist", tooltip = "เทรดที่จบแล้วล่าสุด · เต็ม = 10 รายการ, ย่อ = 3 รายการ", group = DASHBOARD_GROUP)
 historyPositionInput = input.string(position.middle_left, "", options = [position.top_left, position.top_center, position.top_right, position.middle_left, position.middle_right, position.bottom_left, position.bottom_center, position.bottom_right], inline = "hist", group = DASHBOARD_GROUP)
 
 bool showStatsInput = not hideAllDashboardsInput and statsModeInput != MODE_HIDDEN
@@ -85,11 +87,13 @@ bool showTradeHistoryInput = not hideAllDashboardsInput and historyModeInput != 
 bool showTelegramBanner = not hideAllDashboardsInput and showTelegramBannerInput
 
 // --- Notification inputs ---
-alertOnSignalInput = input.bool(true, "Alert on new BUY/SELL signal", tooltip = "Sends a message with Entry, SL, TP1, TP2 and TP3 when a new signal is confirmed on bar close.", group = NOTIFY_GROUP)
-alertOnTpInput = input.bool(true, "Alert when TP1/TP2/TP3 is reached", group = NOTIFY_GROUP)
-alertOnSlInput = input.bool(true, "Alert when stop loss is hit", group = NOTIFY_GROUP)
-alertFormatInput = input.string("Text (TradingView app / LINE relay)", "Message format", options = ["Text (TradingView app / LINE relay)", "Telegram JSON (webhook)"], tooltip = "Text = readable message for the TradingView app, e-mail or a LINE relay script. Telegram JSON = body that the Telegram Bot API accepts directly from a TradingView webhook.", group = NOTIFY_GROUP)
-telegramChatIdInput = input.string("", "Telegram chat_id", tooltip = "Only used with 'Telegram JSON'. Your personal/group chat id, e.g. 123456789 or -1001234567890.", group = NOTIFY_GROUP)
+string FORMAT_TEXT = "ข้อความ (แอป TradingView / LINE)"
+string FORMAT_TELEGRAM = "Telegram JSON (webhook)"
+alertOnSignalInput = input.bool(true, "แจ้งเมื่อมีสัญญาณ BUY/SELL", tooltip = "ส่ง Entry, SL, TP1–TP3 เมื่อแท่งปิด · สร้าง Alert แบบ 'Any alert() function call'", group = NOTIFY_GROUP)
+alertOnTpInput = input.bool(true, "แจ้งเมื่อถึง TP1 / TP2 / TP3", group = NOTIFY_GROUP)
+alertOnSlInput = input.bool(true, "แจ้งเมื่อโดน SL", tooltip = "รวมกรณีราคากลับมาโดน SL หลังถึง TP1 แล้ว", group = NOTIFY_GROUP)
+alertFormatInput = input.string(FORMAT_TEXT, "รูปแบบข้อความ", options = [FORMAT_TEXT, FORMAT_TELEGRAM], tooltip = "ข้อความ = อ่านได้ทันที · Telegram JSON = ส่งตรงเข้า Telegram ผ่าน webhook (ต้องใช้แพ็กเกจที่มี webhook)", group = NOTIFY_GROUP)
+telegramChatIdInput = input.string("", "Telegram chat_id", tooltip = "ใช้เฉพาะรูปแบบ Telegram JSON เช่น 123456789", group = NOTIFY_GROUP)
 
 // --- Helper functions ---
 createPriceLabel(int x, float price, string title, color labelColor) =>
@@ -197,8 +201,13 @@ bool adxSignalFilterPassed = not onlyStrongAdxSignalsInput or (not na(adxValue) 
 bool ema200LongAllowed = not useEma200FilterInput or close > ema200Value
 bool ema200ShortAllowed = not useEma200FilterInput or close < ema200Value
 bool barConfirmedForSignal = not confirmedSignalsOnlyInput or barstate.isconfirmed
-bool buySignal = (unfilteredBuySignal or aggressiveEmaReentryBuySignal) and adxSignalFilterPassed and ema200LongAllowed and barConfirmedForSignal
-bool sellSignal = (unfilteredSellSignal or aggressiveEmaReentrySellSignal) and adxSignalFilterPassed and ema200ShortAllowed and barConfirmedForSignal
+// Higher-timeframe trend: Supertrend direction of the last CLOSED higher-timeframe candle (no repaint).
+bool useHtfFilter = htfFilterInput != ""
+float htfDirection = request.security(syminfo.tickerid, htfFilterInput, direction[1], gaps = barmerge.gaps_off, lookahead = barmerge.lookahead_on)
+bool htfLongAllowed = not useHtfFilter or (not na(htfDirection) and htfDirection < 0)
+bool htfShortAllowed = not useHtfFilter or (not na(htfDirection) and htfDirection > 0)
+bool buySignal = (unfilteredBuySignal or aggressiveEmaReentryBuySignal) and adxSignalFilterPassed and ema200LongAllowed and htfLongAllowed and barConfirmedForSignal
+bool sellSignal = (unfilteredSellSignal or aggressiveEmaReentrySellSignal) and adxSignalFilterPassed and ema200ShortAllowed and htfShortAllowed and barConfirmedForSignal
 if enableEmaReentryInput and reentryLongArmed and isUpTrend and emaCrossDown
     emaLongPullbackArmed := true
 if enableEmaReentryInput and reentryShortArmed and isDownTrend and emaCrossUp
@@ -228,6 +237,11 @@ bool takeProfit1HitEvent = false
 bool takeProfit2HitEvent = false
 bool takeProfit3HitEvent = false
 bool stopLossHitEvent = false
+// Prices of this candle's events (kept separately because a new signal on the same candle replaces the levels).
+float takeProfit1HitPrice = na
+float takeProfit2HitPrice = na
+float takeProfit3HitPrice = na
+float stopLossHitPrice = na
 var int tradeStartBar = na
 var line entryLevelLine = na
 var line takeProfit1LevelLine = na
@@ -254,11 +268,122 @@ var array<float> keyResistancePrices = array.new_float(0)
 var array<int> keyResistanceTouches = array.new_int(0)
 var array<line> keyResistanceLines = array.new_line(0)
 
+// Check the open trade FIRST (also on a candle with a new signal), so an SL/TP hit is never skipped.
+// Statistics model: the whole position is closed at TP1 (win), at SL (loss),
+// or at the close of an opposite-signal candle (win/loss by its real R).
+if tradeDirection != 0 and not tradeResolved
+    bool stopHitForStats = tradeDirection == 1 ? low <= stopLossLevel : high >= stopLossLevel
+    bool takeProfit1HitForStats = tradeDirection == 1 ? high >= takeProfit1Level : low <= takeProfit1Level
+    if stopHitForStats
+        stopLossHitEvent := true
+        stopLossHitPrice := stopLossLevel
+        losingTrades += 1
+        totalProfitR -= 1.0
+        if not tradeHistoryRecorded
+            array.unshift(tradeDirectionHistory, tradeDirection == 1 ? "Long" : "Short")
+            array.unshift(tradeOutcomeHistory, "SL")
+            array.unshift(tradeRrHistory, -1.0)
+            array.unshift(tradeSlHistory, "Yes")
+            if array.size(tradeDirectionHistory) > 10
+                array.pop(tradeDirectionHistory)
+                array.pop(tradeOutcomeHistory)
+                array.pop(tradeRrHistory)
+                array.pop(tradeSlHistory)
+            tradeHistoryRecorded := true
+        tradeResolved := true
+        tradeDirection := 0
+    else if takeProfit1HitForStats
+        winningTrades += 1
+        totalProfitR += tp1RiskRewardInput
+        tradeResolved := true
+
+// After TP1 the trade keeps running toward TP2/TP3; if price comes back to the original SL, the trade ends.
+if tradeDirection != 0 and takeProfit1Reached
+    bool stopHitAfterTp = tradeDirection == 1 ? low <= stopLossLevel : high >= stopLossLevel
+    if stopHitAfterTp
+        stopLossHitEvent := true
+        stopLossHitPrice := stopLossLevel
+        if not tradeHistoryRecorded
+            array.unshift(tradeDirectionHistory, tradeDirection == 1 ? "Long" : "Short")
+            array.unshift(tradeOutcomeHistory, (takeProfit3Reached ? "TP3" : takeProfit2Reached ? "TP2" : "TP1") + "→SL")
+            array.unshift(tradeRrHistory, takeProfit3Reached ? tp3RiskRewardInput : takeProfit2Reached ? tp2RiskRewardInput : tp1RiskRewardInput)
+            array.unshift(tradeSlHistory, "Yes")
+            if array.size(tradeDirectionHistory) > 10
+                array.pop(tradeDirectionHistory)
+                array.pop(tradeOutcomeHistory)
+                array.pop(tradeRrHistory)
+                array.pop(tradeSlHistory)
+            tradeHistoryRecorded := true
+        tradeDirection := 0
+
+if tradeDirection != 0
+    if tradeDirection == 1 and not takeProfit1Reached and not na(takeProfit1Level) and high >= takeProfit1Level
+        takeProfit1Reached := true
+        takeProfit1HitEvent := true
+        takeProfit1HitPrice := takeProfit1Level
+    if tradeDirection == 1 and not takeProfit2Reached and not na(takeProfit2Level) and high >= takeProfit2Level
+        takeProfit2Reached := true
+        takeProfit2HitEvent := true
+        takeProfit2HitPrice := takeProfit2Level
+    if tradeDirection == 1 and not takeProfit3Reached and not na(takeProfit3Level) and high >= takeProfit3Level
+        takeProfit3Reached := true
+        reentryLongArmed := true
+        emaLongPullbackArmed := false
+        takeProfit3HitEvent := true
+        takeProfit3HitPrice := takeProfit3Level
+        if not tradeHistoryRecorded
+            array.unshift(tradeDirectionHistory, "Long")
+            array.unshift(tradeOutcomeHistory, "TP3")
+            array.unshift(tradeRrHistory, tp3RiskRewardInput)
+            array.unshift(tradeSlHistory, "No")
+            if array.size(tradeDirectionHistory) > 10
+                array.pop(tradeDirectionHistory)
+                array.pop(tradeOutcomeHistory)
+                array.pop(tradeRrHistory)
+                array.pop(tradeSlHistory)
+            tradeHistoryRecorded := true
+    if tradeDirection == -1 and not takeProfit1Reached and not na(takeProfit1Level) and low <= takeProfit1Level
+        takeProfit1Reached := true
+        takeProfit1HitEvent := true
+        takeProfit1HitPrice := takeProfit1Level
+    if tradeDirection == -1 and not takeProfit2Reached and not na(takeProfit2Level) and low <= takeProfit2Level
+        takeProfit2Reached := true
+        takeProfit2HitEvent := true
+        takeProfit2HitPrice := takeProfit2Level
+    if tradeDirection == -1 and not takeProfit3Reached and not na(takeProfit3Level) and low <= takeProfit3Level
+        takeProfit3Reached := true
+        reentryShortArmed := true
+        emaShortPullbackArmed := false
+        takeProfit3HitEvent := true
+        takeProfit3HitPrice := takeProfit3Level
+        if not tradeHistoryRecorded
+            array.unshift(tradeDirectionHistory, "Short")
+            array.unshift(tradeOutcomeHistory, "TP3")
+            array.unshift(tradeRrHistory, tp3RiskRewardInput)
+            array.unshift(tradeSlHistory, "No")
+            if array.size(tradeDirectionHistory) > 10
+                array.pop(tradeDirectionHistory)
+                array.pop(tradeOutcomeHistory)
+                array.pop(tradeRrHistory)
+                array.pop(tradeSlHistory)
+            tradeHistoryRecorded := true
+
+// A new signal while the previous trade is still open: close it at this candle's close.
+float reversalRisk = math.abs(entryLevel - stopLossLevel)
+float reversalR = tradeDirection != 0 and reversalRisk > 0 ? (close - entryLevel) * tradeDirection / reversalRisk : 0.0
+if (buySignal or sellSignal) and tradeDirection != 0 and not tradeResolved
+    totalProfitR += reversalR
+    if reversalR > 0
+        winningTrades += 1
+    else
+        losingTrades += 1
+    tradeResolved := true
+
 // Record the previous trade when an opposite signal occurs.
 if (buySignal or sellSignal) and tradeDirection != 0 and not tradeHistoryRecorded
     string previousDirection = tradeDirection == 1 ? "Long" : "Short"
     string previousOutcome = takeProfit3Reached ? "TP3" : takeProfit2Reached ? "TP2" : takeProfit1Reached ? "TP1" : "REV"
-    float previousRr = takeProfit3Reached ? tp3RiskRewardInput : takeProfit2Reached ? tp2RiskRewardInput : takeProfit1Reached ? tp1RiskRewardInput : 0.0
+    float previousRr = takeProfit3Reached ? tp3RiskRewardInput : takeProfit2Reached ? tp2RiskRewardInput : takeProfit1Reached ? tp1RiskRewardInput : reversalR
     array.unshift(tradeDirectionHistory, previousDirection)
     array.unshift(tradeOutcomeHistory, previousOutcome)
     array.unshift(tradeRrHistory, previousRr)
@@ -307,76 +432,6 @@ if sellSignal
     emaShortPullbackArmed := false
     totalSignals += 1
 
-if not (buySignal or sellSignal) and tradeDirection != 0 and not tradeResolved
-    bool stopHitForStats = tradeDirection == 1 ? low <= stopLossLevel : high >= stopLossLevel
-    bool takeProfit1HitForStats = tradeDirection == 1 ? high >= takeProfit1Level : low <= takeProfit1Level
-    if stopHitForStats
-        stopLossHitEvent := true
-        losingTrades += 1
-        totalProfitR -= 1.0
-        if not tradeHistoryRecorded
-            array.unshift(tradeDirectionHistory, tradeDirection == 1 ? "Long" : "Short")
-            array.unshift(tradeOutcomeHistory, "SL")
-            array.unshift(tradeRrHistory, -1.0)
-            array.unshift(tradeSlHistory, "Yes")
-            if array.size(tradeDirectionHistory) > 10
-                array.pop(tradeDirectionHistory)
-                array.pop(tradeOutcomeHistory)
-                array.pop(tradeRrHistory)
-                array.pop(tradeSlHistory)
-            tradeHistoryRecorded := true
-        tradeResolved := true
-        tradeDirection := 0
-    else if takeProfit1HitForStats
-        winningTrades += 1
-        totalProfitR += tp1RiskRewardInput
-        tradeResolved := true
-
-if not (buySignal or sellSignal) and tradeDirection != 0
-    if tradeDirection == 1 and not takeProfit1Reached and not na(takeProfit1Level) and high >= takeProfit1Level
-        takeProfit1Reached := true
-        takeProfit1HitEvent := true
-    if tradeDirection == 1 and not takeProfit2Reached and not na(takeProfit2Level) and high >= takeProfit2Level
-        takeProfit2Reached := true
-        takeProfit2HitEvent := true
-    if tradeDirection == 1 and not takeProfit3Reached and not na(takeProfit3Level) and high >= takeProfit3Level
-        takeProfit3Reached := true
-        reentryLongArmed := true
-        emaLongPullbackArmed := false
-        takeProfit3HitEvent := true
-        if not tradeHistoryRecorded
-            array.unshift(tradeDirectionHistory, "Long")
-            array.unshift(tradeOutcomeHistory, "TP3")
-            array.unshift(tradeRrHistory, tp3RiskRewardInput)
-            array.unshift(tradeSlHistory, "No")
-            if array.size(tradeDirectionHistory) > 10
-                array.pop(tradeDirectionHistory)
-                array.pop(tradeOutcomeHistory)
-                array.pop(tradeRrHistory)
-                array.pop(tradeSlHistory)
-            tradeHistoryRecorded := true
-    if tradeDirection == -1 and not takeProfit1Reached and not na(takeProfit1Level) and low <= takeProfit1Level
-        takeProfit1Reached := true
-        takeProfit1HitEvent := true
-    if tradeDirection == -1 and not takeProfit2Reached and not na(takeProfit2Level) and low <= takeProfit2Level
-        takeProfit2Reached := true
-        takeProfit2HitEvent := true
-    if tradeDirection == -1 and not takeProfit3Reached and not na(takeProfit3Level) and low <= takeProfit3Level
-        takeProfit3Reached := true
-        reentryShortArmed := true
-        emaShortPullbackArmed := false
-        takeProfit3HitEvent := true
-        if not tradeHistoryRecorded
-            array.unshift(tradeDirectionHistory, "Short")
-            array.unshift(tradeOutcomeHistory, "TP3")
-            array.unshift(tradeRrHistory, tp3RiskRewardInput)
-            array.unshift(tradeSlHistory, "No")
-            if array.size(tradeDirectionHistory) > 10
-                array.pop(tradeDirectionHistory)
-                array.pop(tradeOutcomeHistory)
-                array.pop(tradeRrHistory)
-                array.pop(tradeSlHistory)
-            tradeHistoryRecorded := true
 //
 // === Dashboard with Telegram Link ===
 var table myTable = table.new(position.top_center, 1, 1, border_width=1, frame_color=color.black, bgcolor=color.white)
@@ -668,29 +723,29 @@ if not showPriceLabelsInput
         stopLossPriceLabel := na
 
 // --- Plots and chart coloring ---
-upTrendPlot = plot(showTrendLinesInput ? upTrend : na, "Uptrend", color = upColorInput, linewidth = 2, style = plot.style_linebr)
-downTrendPlot = plot(showTrendLinesInput ? downTrend : na, "Downtrend", color = downColorInput, linewidth = 2, style = plot.style_linebr)
+upTrendPlot = plot(showTrendLinesInput ? upTrend : na, "เส้นขาขึ้น", color = upColorInput, linewidth = 2, style = plot.style_linebr)
+downTrendPlot = plot(showTrendLinesInput ? downTrend : na, "เส้นขาลง", color = downColorInput, linewidth = 2, style = plot.style_linebr)
 plot(useEma200FilterInput ? ema200Value : na, "EMA 200 filter", color = color.new(chart.fg_color, 15), linewidth = 2)
 plot(enableEmaReentryInput or enableAggressiveEmaReentryInput ? emaReentryValue : na, "Re-entry EMA", color = entryColorInput, linewidth = 1)
 priceReferencePlot = plot(showFillInput ? close : na, "Trend area reference", display = display.none)
-fill(priceReferencePlot, upTrendPlot, color = color.new(upColorInput, 88), title = "Uptrend area")
-fill(priceReferencePlot, downTrendPlot, color = color.new(downColorInput, 88), title = "Downtrend area")
-plotshape(showSignalsInput and buySignal, title = "Buy signal", style = shape.labelup, location = location.belowbar, color = upColorInput, text = "BUY", textcolor = color.white, size = size.tiny)
-plotshape(showSignalsInput and sellSignal, title = "Sell signal", style = shape.labeldown, location = location.abovebar, color = downColorInput, text = "SELL", textcolor = color.white, size = size.tiny)
-plotshape(showTpMarksInput and takeProfit1HitEvent ? takeProfit1Level : na, title = "TP1 reached", style = shape.labelup, location = location.absolute, color = takeProfit1ColorInput, text = "✓ TP1", textcolor = color.white, size = size.tiny)
-plotshape(showTpMarksInput and takeProfit2HitEvent ? takeProfit2Level : na, title = "TP2 reached", style = shape.labelup, location = location.absolute, color = takeProfit2ColorInput, text = "✓ TP2", textcolor = color.white, size = size.tiny)
-plotshape(showTpMarksInput and takeProfit3HitEvent ? takeProfit3Level : na, title = "TP3 reached", style = shape.labelup, location = location.absolute, color = takeProfit3ColorInput, text = "✓ TP3", textcolor = color.white, size = size.tiny)
+fill(priceReferencePlot, upTrendPlot, color = color.new(upColorInput, 88), title = "พื้นที่ขาขึ้น")
+fill(priceReferencePlot, downTrendPlot, color = color.new(downColorInput, 88), title = "พื้นที่ขาลง")
+plotshape(showSignalsInput and buySignal, title = "สัญญาณ BUY", style = shape.labelup, location = location.belowbar, color = upColorInput, text = "BUY", textcolor = color.white, size = size.tiny)
+plotshape(showSignalsInput and sellSignal, title = "สัญญาณ SELL", style = shape.labeldown, location = location.abovebar, color = downColorInput, text = "SELL", textcolor = color.white, size = size.tiny)
+plotshape(showTpMarksInput and takeProfit1HitEvent ? takeProfit1HitPrice : na, title = "ถึง TP1", style = shape.labelup, location = location.absolute, color = takeProfit1ColorInput, text = "✓ TP1", textcolor = color.white, size = size.tiny)
+plotshape(showTpMarksInput and takeProfit2HitEvent ? takeProfit2HitPrice : na, title = "ถึง TP2", style = shape.labelup, location = location.absolute, color = takeProfit2ColorInput, text = "✓ TP2", textcolor = color.white, size = size.tiny)
+plotshape(showTpMarksInput and takeProfit3HitEvent ? takeProfit3HitPrice : na, title = "ถึง TP3", style = shape.labelup, location = location.absolute, color = takeProfit3ColorInput, text = "✓ TP3", textcolor = color.white, size = size.tiny)
 barcolor(showCandleColorsInput ? (isUpTrend ? color.new(candleUpColorInput, candleTransparencyInput) : isDownTrend ? color.new(candleDownColorInput, candleTransparencyInput) : na) : na)
 
 // --- Alert conditions (manual alerts, one per event) ---
-alertcondition(buySignal, "Supertrend Buy", "Supertrend BUY on {{ticker}} at {{close}}")
-alertcondition(sellSignal, "Supertrend Sell", "Supertrend SELL on {{ticker}} at {{close}}")
-alertcondition(buySignal or sellSignal, "Long or Short signal", "{{ticker}} new signal at {{close}} (side: {{plot(\"Signal side\")}} = 1 LONG / -1 SHORT)")
+alertcondition(buySignal, "สัญญาณ BUY", "BUY {{ticker}} ที่ {{close}}")
+alertcondition(sellSignal, "สัญญาณ SELL", "SELL {{ticker}} ที่ {{close}}")
+alertcondition(buySignal or sellSignal, "สัญญาณ BUY หรือ SELL", "สัญญาณใหม่ {{ticker}} ที่ {{close}} (ฝั่ง: {{plot(\"Signal side\")}} → 1 = BUY, -1 = SELL)")
 plot(buySignal ? 1 : sellSignal ? -1 : 0, "Signal side", display = display.none)
-alertcondition(takeProfit1HitEvent, "TP1 reached", "TP1 reached on {{ticker}} at {{close}}")
-alertcondition(takeProfit2HitEvent, "TP2 reached", "TP2 reached on {{ticker}} at {{close}}")
-alertcondition(takeProfit3HitEvent, "TP3 reached", "TP3 reached on {{ticker}} at {{close}}")
-alertcondition(stopLossHitEvent, "Stop loss hit", "Stop loss hit on {{ticker}} at {{close}}")
+alertcondition(takeProfit1HitEvent, "ถึง TP1", "ถึง TP1 {{ticker}} ที่ {{close}}")
+alertcondition(takeProfit2HitEvent, "ถึง TP2", "ถึง TP2 {{ticker}} ที่ {{close}}")
+alertcondition(takeProfit3HitEvent, "ถึง TP3", "ถึง TP3 {{ticker}} ที่ {{close}}")
+alertcondition(stopLossHitEvent, "โดน SL", "โดน SL {{ticker}} ที่ {{close}}")
 
 // --- Detailed notifications (create ONE alert with "Any alert() function call") ---
 fmtPrice(float price) =>
@@ -698,39 +753,56 @@ fmtPrice(float price) =>
 
 sendNotification(string body) =>
     string message = body
-    if alertFormatInput == "Telegram JSON (webhook)"
+    if alertFormatInput == FORMAT_TELEGRAM
         // Newlines must be escaped inside JSON strings.
         string escaped = str.replace_all(str.replace_all(body, "\"", "'"), "\n", "\\n")
         message := "{\"chat_id\":\"" + telegramChatIdInput + "\",\"text\":\"" + escaped + "\"}"
     alert(message, alert.freq_once_per_bar_close)
 
 string notifyHeader = syminfo.ticker + " [" + timeframe.period + "]"
+string notifyCandle = "\nแท่ง: " + str.format_time(time, "dd/MM HH:mm", "Asia/Bangkok")
+if alertOnTpInput and (takeProfit1HitEvent or takeProfit2HitEvent or takeProfit3HitEvent)
+    string tpText = takeProfit3HitEvent ? "TP3" : takeProfit2HitEvent ? "TP2" : "TP1"
+    float tpPrice = takeProfit3HitEvent ? takeProfit3HitPrice : takeProfit2HitEvent ? takeProfit2HitPrice : takeProfit1HitPrice
+    sendNotification("✅ ถึง " + tpText + " " + notifyHeader + "\nราคา: " + fmtPrice(tpPrice) + notifyCandle)
+if alertOnSlInput and stopLossHitEvent
+    sendNotification("⛔ โดน SL " + notifyHeader + "\nSL: " + fmtPrice(stopLossHitPrice) + notifyCandle)
 if alertOnSignalInput and (buySignal or sellSignal)
-    string sideText = buySignal ? "🟢 LONG (Buy)" : "🔴 SHORT (Sell)"
+    string sideText = buySignal ? "🟢 BUY (ซื้อ)" : "🔴 SELL (ขาย)"
     float riskPoints = math.abs(entryLevel - stopLossLevel)
     sendNotification(sideText + " " + notifyHeader
-         + "\nEntry: " + fmtPrice(entryLevel)
-         + "\nSL: " + fmtPrice(stopLossLevel) + " (risk " + fmtPrice(riskPoints) + ")"
+         + "\nเข้า: " + fmtPrice(entryLevel)
+         + "\nSL: " + fmtPrice(stopLossLevel) + " (ระยะ " + fmtPrice(riskPoints) + ")"
          + "\nTP1: " + fmtPrice(takeProfit1Level)
          + "\nTP2: " + fmtPrice(takeProfit2Level)
          + "\nTP3: " + fmtPrice(takeProfit3Level)
-         + "\nTime: " + str.format_time(time_close, "dd/MM HH:mm", "Asia/Bangkok"))
-if alertOnTpInput and (takeProfit1HitEvent or takeProfit2HitEvent or takeProfit3HitEvent)
-    string tpText = takeProfit3HitEvent ? "TP3" : takeProfit2HitEvent ? "TP2" : "TP1"
-    float tpPrice = takeProfit3HitEvent ? takeProfit3Level : takeProfit2HitEvent ? takeProfit2Level : takeProfit1Level
-    sendNotification("✅ " + tpText + " reached " + notifyHeader + "\nPrice: " + fmtPrice(tpPrice))
-if alertOnSlInput and stopLossHitEvent
-    sendNotification("⛔ Stop loss hit " + notifyHeader + "\nSL: " + fmtPrice(stopLossLevel))
+         + notifyCandle)
 
 // --- Dashboard helpers ---
-dashCell(table t, int col, int row, string txt, color txtColor, color bg = na) =>
-    table.cell(t, col, row, txt, text_color = txtColor, bgcolor = bg, text_size = dashboardTextSizeInput)
+dashCell(table t, int col, int row, string txt, color txtColor, color bg = na, string tip = "") =>
+    table.cell(t, col, row, txt, text_color = txtColor, bgcolor = bg, text_size = dashboardTextSizeInput, tooltip = tip)
 
 color dashHeaderBg = color.new(entryColorInput, 70)
 stateColor(string state) =>
     state == "Bullish" ? upColorInput : state == "Bearish" ? downColorInput : chart.fg_color
 stateArrow(string state) =>
     state == "Bullish" ? "▲" : state == "Bearish" ? "▼" : "•"
+// Internal values stay in English; only the text on screen is Thai.
+thText(string s) =>
+    switch s
+        "Bullish" => "ขาขึ้น"
+        "Bearish" => "ขาลง"
+        "Neutral" => "กลาง"
+        "Long" => "ซื้อ"
+        "Short" => "ขาย"
+        "Yes" => "ใช่"
+        "No" => "ไม่"
+        "REV" => "กลับทิศ"
+        "Range" => "ไซด์เวย์"
+        "Transition" => "กำลังเปลี่ยน"
+        "Strong trend" => "เทรนด์แรง"
+        "Waiting for data" => "รอข้อมูล"
+        => s
 
 // --- Win-rate table ---
 var table statsTable = table.new(statsPositionInput, 2, 7, bgcolor = color.new(chart.bg_color, 10), frame_color = color.new(chart.fg_color, 100), frame_width = 0, border_color = color.new(chart.fg_color, 100), border_width = 0)
@@ -738,27 +810,29 @@ if barstate.islast
     table.clear(statsTable, 0, 0, 1, 6)
     if showStatsInput
         int closedTrades = winningTrades + losingTrades
-        string winRateText = closedTrades > 0 ? str.tostring(100.0 * winningTrades / closedTrades, "#.##") + " %" : "n/a"
+        string winRateText = closedTrades > 0 ? str.tostring(100.0 * winningTrades / closedTrades, "#.##") + " %" : "-"
         color profitColor = totalProfitR >= 0 ? upColorInput : downColorInput
+        string tipWinRate = "ชนะ ÷ เทรดที่รู้ผล × 100 · สมมติปิดทั้งหมดที่ TP1 หรือ SL หรือเมื่อเกิดสัญญาณกลับทิศ"
+        string tipProfit = "ผลรวมกำไร/ขาดทุนเป็นหน่วย R (1R = ระยะ SL) · ยังไม่หัก spread"
         if statsModeInput == MODE_COMPACT
-            dashCell(statsTable, 0, 0, "Win rate", chart.fg_color, dashHeaderBg)
-            dashCell(statsTable, 1, 0, winRateText, chart.fg_color, dashHeaderBg)
-            dashCell(statsTable, 0, 1, "Profit", profitColor)
-            dashCell(statsTable, 1, 1, str.tostring(totalProfitR, "#.##") + " R", profitColor)
+            dashCell(statsTable, 0, 0, "อัตราชนะ", chart.fg_color, dashHeaderBg, tipWinRate)
+            dashCell(statsTable, 1, 0, winRateText, chart.fg_color, dashHeaderBg, tipWinRate)
+            dashCell(statsTable, 0, 1, "กำไร", profitColor, na, tipProfit)
+            dashCell(statsTable, 1, 1, str.tostring(totalProfitR, "#.##") + " R", profitColor, na, tipProfit)
         else
-            dashCell(statsTable, 0, 0, "Supertrend statistics", chart.fg_color, dashHeaderBg)
+            dashCell(statsTable, 0, 0, "สถิติย้อนหลัง", chart.fg_color, dashHeaderBg, "คำนวณจากสัญญาณทั้งหมดบนกราฟนี้ (เท่าที่ TradingView โหลดมา)")
             dashCell(statsTable, 1, 0, "", chart.fg_color, dashHeaderBg)
-            dashCell(statsTable, 0, 1, "Signals", chart.fg_color)
+            dashCell(statsTable, 0, 1, "สัญญาณ", chart.fg_color, na, "จำนวน BUY + SELL ทั้งหมด")
             dashCell(statsTable, 1, 1, str.tostring(totalSignals), chart.fg_color)
-            dashCell(statsTable, 0, 2, "Evaluated", chart.fg_color)
+            dashCell(statsTable, 0, 2, "รู้ผลแล้ว", chart.fg_color, na, "เทรดที่จบแล้ว = ชนะ + แพ้ (เทรดล่าสุดที่ยังวิ่งอยู่ไม่นับ)")
             dashCell(statsTable, 1, 2, str.tostring(closedTrades), chart.fg_color)
-            dashCell(statsTable, 0, 3, "Wins (TP1)", upColorInput)
+            dashCell(statsTable, 0, 3, "ชนะ", upColorInput, na, "ถึง TP1 ก่อนโดน SL หรือปิดตอนกลับทิศแล้วกำไร")
             dashCell(statsTable, 1, 3, str.tostring(winningTrades), upColorInput)
-            dashCell(statsTable, 0, 4, "Losses (SL)", downColorInput)
+            dashCell(statsTable, 0, 4, "แพ้", downColorInput, na, "โดน SL ก่อนถึง TP1 หรือปิดตอนกลับทิศแล้วขาดทุน")
             dashCell(statsTable, 1, 4, str.tostring(losingTrades), downColorInput)
-            dashCell(statsTable, 0, 5, "Win rate (TP1)", chart.fg_color)
+            dashCell(statsTable, 0, 5, "อัตราชนะ", chart.fg_color, na, tipWinRate)
             dashCell(statsTable, 1, 5, winRateText, chart.fg_color)
-            dashCell(statsTable, 0, 6, "Profit (R)", profitColor)
+            dashCell(statsTable, 0, 6, "กำไร (R)", profitColor, na, tipProfit)
             dashCell(statsTable, 1, 6, str.tostring(totalProfitR, "#.##") + " R", profitColor)
 
 // --- ADX dashboard ---
@@ -770,27 +844,30 @@ var table adxDashboardTable = table.new(adxPositionInput, 2, 8, bgcolor = color.
 if barstate.islast
     table.clear(adxDashboardTable, 0, 0, 1, 7)
     if showAdxDashboardInput
-        string adxText = na(adxValue) ? "n/a" : str.tostring(adxValue, "#.##")
+        string adxText = na(adxValue) ? "-" : str.tostring(adxValue, "#.##")
+        string filterText = adxFilterActive ? "เข้าได้" : "รอ"
+        string tipAdx = "ความแรงของเทรนด์ 0–100 (ไม่บอกทิศ) · < " + str.tostring(adxRangeThresholdInput) + " ไซด์เวย์, ≥ " + str.tostring(adxStrongThresholdInput) + " เทรนด์แรง"
+        string tipFilter = "เข้าได้ = ADX ≥ " + str.tostring(adxStrongThresholdInput) + " และแรงซื้อ/ขายไปทางเดียวกับ Supertrend · ตารางนี้แค่แสดงผล ไม่ได้ปิดกั้นสัญญาณ"
         if adxModeInput == MODE_COMPACT
-            dashCell(adxDashboardTable, 0, 0, "ADX " + adxText, adxPhaseColor, dashHeaderBg)
-            dashCell(adxDashboardTable, 1, 0, adxFilterActive ? "Trend eligible" : "Wait", adxFilterActive ? upColorInput : downColorInput, dashHeaderBg)
+            dashCell(adxDashboardTable, 0, 0, "ADX " + adxText, adxPhaseColor, dashHeaderBg, tipAdx)
+            dashCell(adxDashboardTable, 1, 0, filterText, adxFilterActive ? upColorInput : downColorInput, dashHeaderBg, tipFilter)
         else
-            dashCell(adxDashboardTable, 0, 0, "ADX dashboard", chart.fg_color, dashHeaderBg)
+            dashCell(adxDashboardTable, 0, 0, "ความแรงเทรนด์ (ADX)", chart.fg_color, dashHeaderBg)
             dashCell(adxDashboardTable, 1, 0, "", chart.fg_color, dashHeaderBg)
-            dashCell(adxDashboardTable, 0, 1, "ADX", chart.fg_color)
+            dashCell(adxDashboardTable, 0, 1, "ADX", chart.fg_color, na, tipAdx)
             dashCell(adxDashboardTable, 1, 1, adxText, adxPhaseColor)
-            dashCell(adxDashboardTable, 0, 2, "+DI", upColorInput)
-            dashCell(adxDashboardTable, 1, 2, na(diPlus) ? "n/a" : str.tostring(diPlus, "#.##"), upColorInput)
-            dashCell(adxDashboardTable, 0, 3, "-DI", downColorInput)
-            dashCell(adxDashboardTable, 1, 3, na(diMinus) ? "n/a" : str.tostring(diMinus, "#.##"), downColorInput)
-            dashCell(adxDashboardTable, 0, 4, "Market phase", chart.fg_color)
-            dashCell(adxDashboardTable, 1, 4, adxPhase, adxPhaseColor)
-            dashCell(adxDashboardTable, 0, 5, "DI direction", chart.fg_color)
-            dashCell(adxDashboardTable, 1, 5, adxDirectionText, stateColor(adxDirectionText))
-            dashCell(adxDashboardTable, 0, 6, "Supertrend", chart.fg_color)
-            dashCell(adxDashboardTable, 1, 6, isUpTrend ? "Uptrend" : isDownTrend ? "Downtrend" : "n/a", isUpTrend ? upColorInput : downColorInput)
-            dashCell(adxDashboardTable, 0, 7, "Filter", chart.fg_color)
-            dashCell(adxDashboardTable, 1, 7, adxFilterActive ? "Trend eligible" : "Wait", adxFilterActive ? upColorInput : downColorInput)
+            dashCell(adxDashboardTable, 0, 2, "+DI แรงซื้อ", upColorInput, na, "ยิ่งสูงยิ่งมีแรงซื้อ")
+            dashCell(adxDashboardTable, 1, 2, na(diPlus) ? "-" : str.tostring(diPlus, "#.##"), upColorInput)
+            dashCell(adxDashboardTable, 0, 3, "−DI แรงขาย", downColorInput, na, "ยิ่งสูงยิ่งมีแรงขาย")
+            dashCell(adxDashboardTable, 1, 3, na(diMinus) ? "-" : str.tostring(diMinus, "#.##"), downColorInput)
+            dashCell(adxDashboardTable, 0, 4, "สภาวะตลาด", chart.fg_color, na, "ไซด์เวย์ = ราคาแกว่งไม่มีทิศ สัญญาณหลอกเยอะ · เทรนด์แรง = สัญญาณน่าเชื่อถือกว่า")
+            dashCell(adxDashboardTable, 1, 4, thText(adxPhase), adxPhaseColor)
+            dashCell(adxDashboardTable, 0, 5, "ฝั่งที่แรงกว่า", chart.fg_color, na, "+DI > −DI = ขาขึ้น, −DI > +DI = ขาลง")
+            dashCell(adxDashboardTable, 1, 5, thText(adxDirectionText), stateColor(adxDirectionText))
+            dashCell(adxDashboardTable, 0, 6, "Supertrend", chart.fg_color, na, "ทิศของ Supertrend บนไทม์เฟรมนี้")
+            dashCell(adxDashboardTable, 1, 6, isUpTrend ? "ขาขึ้น" : isDownTrend ? "ขาลง" : "-", isUpTrend ? upColorInput : downColorInput)
+            dashCell(adxDashboardTable, 0, 7, "สถานะ", chart.fg_color, na, tipFilter)
+            dashCell(adxDashboardTable, 1, 7, filterText, adxFilterActive ? upColorInput : downColorInput)
 
 // --- Multi-timeframe dashboard ---
 var table mtfDashboardTable = table.new(mtfPositionInput, 5, 6, bgcolor = color.new(chart.bg_color, 10), frame_color = color.new(chart.fg_color, 100), frame_width = 0, border_color = color.new(chart.fg_color, 100), border_width = 0)
@@ -800,20 +877,21 @@ if barstate.islast
         array<string> mtfNames = array.from("5m", "15m", "1h", "4h", "1D")
         array<float> mtfScores = array.from(score5m, score15m, score1h, score4h, score1d)
         array<string> mtfStates = array.from(state5m, state15m, state1h, state4h, state1d)
+        string tipScore = "คะแนน 0–100: ADX < " + str.tostring(adxRangeThresholdInput) + " = 50 · ขาขึ้น = 50 + ADX · ขาลง = 50 − ADX · > " + str.tostring(50 + neutralZoneHalfWidthInput) + " ขาขึ้น, < " + str.tostring(50 - neutralZoneHalfWidthInput) + " ขาลง"
         if mtfModeInput == MODE_COMPACT
             for i = 0 to 4
                 string st = array.get(mtfStates, i)
-                dashCell(mtfDashboardTable, i, 0, array.get(mtfNames, i) + " " + stateArrow(st), stateColor(st))
+                dashCell(mtfDashboardTable, i, 0, array.get(mtfNames, i) + " " + stateArrow(st), stateColor(st), na, array.get(mtfNames, i) + ": " + thText(st) + " (คะแนน " + str.tostring(array.get(mtfScores, i), "#") + ") · ▲ ขึ้น ▼ ลง • กลาง")
         else
-            dashCell(mtfDashboardTable, 0, 0, "Timeframe", chart.fg_color, dashHeaderBg)
-            dashCell(mtfDashboardTable, 1, 0, "Score", chart.fg_color, dashHeaderBg)
-            dashCell(mtfDashboardTable, 2, 0, "Direction", chart.fg_color, dashHeaderBg)
+            dashCell(mtfDashboardTable, 0, 0, "ไทม์เฟรม", chart.fg_color, dashHeaderBg, "เทรนด์ของไทม์เฟรมอื่นบนสินทรัพย์เดียวกัน · ควรเทรดตามทิศไทม์เฟรมใหญ่")
+            dashCell(mtfDashboardTable, 1, 0, "คะแนน", chart.fg_color, dashHeaderBg, tipScore)
+            dashCell(mtfDashboardTable, 2, 0, "ทิศทาง", chart.fg_color, dashHeaderBg, "จาก Supertrend + ADX ของไทม์เฟรมนั้น (ค่าเปลี่ยนได้จนกว่าแท่งของไทม์เฟรมนั้นจะปิด)")
             for i = 0 to 4
                 float sc = array.get(mtfScores, i)
                 string st = array.get(mtfStates, i)
                 dashCell(mtfDashboardTable, 0, i + 1, array.get(mtfNames, i), chart.fg_color)
-                dashCell(mtfDashboardTable, 1, i + 1, str.tostring(sc, "#.##"), scoreColor(sc))
-                dashCell(mtfDashboardTable, 2, i + 1, st, stateColor(st))
+                dashCell(mtfDashboardTable, 1, i + 1, str.tostring(sc, "#.##"), scoreColor(sc), na, tipScore)
+                dashCell(mtfDashboardTable, 2, i + 1, thText(st), stateColor(st))
 
 // --- Recent trade history dashboard ---
 var table tradeHistoryTable = table.new(historyPositionInput, 5, 11, bgcolor = color.new(chart.bg_color, 10), frame_color = color.new(chart.fg_color, 100), frame_width = 0, border_color = color.new(chart.fg_color, 100), border_width = 0)
@@ -821,11 +899,13 @@ if barstate.islast
     table.clear(tradeHistoryTable, 0, 0, 4, 10)
     if showTradeHistoryInput
         int historyRows = historyModeInput == MODE_COMPACT ? 3 : 10
-        dashCell(tradeHistoryTable, 0, 0, "#", chart.fg_color, dashHeaderBg)
-        dashCell(tradeHistoryTable, 1, 0, "Direction", chart.fg_color, dashHeaderBg)
-        dashCell(tradeHistoryTable, 2, 0, "Outcome", chart.fg_color, dashHeaderBg)
-        dashCell(tradeHistoryTable, 3, 0, "R:R", chart.fg_color, dashHeaderBg)
-        dashCell(tradeHistoryTable, 4, 0, "Stopped out", chart.fg_color, dashHeaderBg)
+        string tipOutcome = "TP1/TP2/TP3 = TP สูงสุดที่ไปถึง · →SL = ถึง TP แล้วราคากลับมาโดน SL · SL = โดน SL ก่อน TP1 · กลับทิศ = เกิดสัญญาณตรงข้ามก่อนถึง TP1/SL"
+        string tipRr = "ผลเป็นหน่วย R ถ้าปิดที่ TP สูงสุดที่ไปถึง · SL = −1R · กลับทิศ = R จริง ณ ราคาปิดแท่งที่กลับทิศ"
+        dashCell(tradeHistoryTable, 0, 0, "#", chart.fg_color, dashHeaderBg, "1 = ล่าสุด")
+        dashCell(tradeHistoryTable, 1, 0, "ฝั่ง", chart.fg_color, dashHeaderBg)
+        dashCell(tradeHistoryTable, 2, 0, "ผล", chart.fg_color, dashHeaderBg, tipOutcome)
+        dashCell(tradeHistoryTable, 3, 0, "R", chart.fg_color, dashHeaderBg, tipRr)
+        dashCell(tradeHistoryTable, 4, 0, "โดน SL", chart.fg_color, dashHeaderBg, "ใช่ = ราคาแตะ SL (ก่อนหรือหลังถึง TP)")
         for historyIndex = 0 to historyRows - 1
             int historyRow = historyIndex + 1
             if historyIndex < array.size(tradeDirectionHistory)
@@ -834,7 +914,7 @@ if barstate.islast
                 float historyRr = array.get(tradeRrHistory, historyIndex)
                 string historySl = array.get(tradeSlHistory, historyIndex)
                 dashCell(tradeHistoryTable, 0, historyRow, str.tostring(historyRow), chart.fg_color)
-                dashCell(tradeHistoryTable, 1, historyRow, historyDirection, historyDirection == "Long" ? upColorInput : downColorInput)
-                dashCell(tradeHistoryTable, 2, historyRow, historyOutcome, historyOutcome == "SL" ? downColorInput : upColorInput)
+                dashCell(tradeHistoryTable, 1, historyRow, thText(historyDirection), historyDirection == "Long" ? upColorInput : downColorInput)
+                dashCell(tradeHistoryTable, 2, historyRow, thText(historyOutcome), historyOutcome == "SL" ? downColorInput : historyOutcome == "REV" ? chart.fg_color : upColorInput, na, tipOutcome)
                 dashCell(tradeHistoryTable, 3, historyRow, str.tostring(historyRr, "#.##") + "R", historyRr >= 0 ? upColorInput : downColorInput)
-                dashCell(tradeHistoryTable, 4, historyRow, historySl, historySl == "Yes" ? downColorInput : upColorInput)
+                dashCell(tradeHistoryTable, 4, historyRow, thText(historySl), historySl == "Yes" ? downColorInput : upColorInput)
