@@ -450,7 +450,7 @@ def signal_message(asset, tf, trade, cfg, late=False):
     return title, body
 
 
-def event_message(asset, tf, trade, event, cfg):
+def event_message(asset, tf, trade, event, cfg, hit_epoch=None):
     emoji = cfg["notify"]["emoji"]
     buy_sell, _ = side_words(trade["side"])
     if event == "SL":
@@ -462,6 +462,10 @@ def event_message(asset, tf, trade, event, cfg):
         body = "%s trade: %s %s" % (buy_sell, event, fmt(trade["tps"][k], trade.get("digits")))
         if k == 0 and len(trade["tps"]) > 1:
             body += " (consider moving SL to entry %s)" % fmt(trade["entry"], trade.get("digits"))
+    # Candle open times, same labels as TradingView.
+    if hit_epoch is not None:
+        body += "\nHit candle: %s" % fmt_time(hit_epoch, cfg)
+    body += "\nEntry candle: %s" % fmt_time(trade["epoch"], cfg)
     return title, body
 
 
@@ -584,7 +588,7 @@ def process(deriv, cfg, state, asset, tf, shared=None):
             continue
         for ev in update_trade(st["trade"], candle):
             if alerts.get(ev.lower()):
-                title, body = event_message(asset, tf, st["trade"], ev, cfg)
+                title, body = event_message(asset, tf, st["trade"], ev, cfg, candle["epoch"])
                 notify(cfg, title, body, n["tpsl_sound"], speech_text(asset, tf, ev, cfg), symbol, shared)
     st["last_epoch"] = candles[-1]["epoch"]
     if shared is not None and st.get("trade"):
@@ -667,7 +671,7 @@ def make_handler(shared):
             tf = (asset.get("timeframes") or [1])[0]
             trade = sample_trade(cfg)
             sig = signal_message(asset, tf, trade, cfg)
-            tp = event_message(asset, tf, trade, "TP1", cfg)
+            tp = event_message(asset, tf, trade, "TP1", cfg, trade["epoch"] + tf * 60)
             if path == "/api/config":
                 shared.set_cfg(cfg)
                 self._send(200, {"ok": True, "config": cfg})
