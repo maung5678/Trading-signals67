@@ -57,7 +57,7 @@ def main():
     errors = []
 
     ind_inputs = [i for i in inputs(ind_text) if i[1] != "color"]
-    build = ea_text[ea_text.index("void BuildIndicatorParams()"):]
+    build = ea_text[ea_text.index("void BuildIndicatorParams("):]
     build = build[: build.index("\n  }\n")]
     params = PARAM_RE.findall(build)
     if not params or params[0][0] != "Str":

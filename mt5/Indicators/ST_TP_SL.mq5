@@ -7,25 +7,26 @@
 //|  - Optional filters: ADX, higher-timeframe trend, EMA 200        |
 //|  - Optional signals: trend-line/channel breakout, re-entry       |
 //|    after TP3 (Supertrend touch, EMA cross, fast EMA touch)       |
-//|  - Dashboards: statistics, ADX, multi-timeframe, trade history   |
+//|  - Dashboards: statistics, win rate per timeframe, ADX,          |
+//|    multi-timeframe trend, trade history                          |
+//|                                                                  |
+//|  One signal engine (class CEngine) is used for the chart and for |
+//|  the win-rate-per-timeframe table, so both count the same way.   |
 //|                                                                  |
 //|  The EA (Experts/ST_TP_SL_EA.mq5) embeds this indicator and      |
-//|  trades its signal buffers, so the chart labels and the orders   |
-//|  always come from the same code.                                 |
-//|                                                                  |
-//|  Buffers read by the EA (index = buffer number):                 |
+//|  trades its signal buffers. Buffers read by the EA:              |
 //|   3 Supertrend value   13 signal (1 BUY, -1 SELL, 0)             |
 //|  14 entry  15 SL  16 TP1  17 TP2  18 TP3                         |
 //|  19 direction (-1 up, 1 down)  20 ATR  21 ADX                    |
-//|  Keep the input order in sync with the EA (mt5/tools/            |
-//|  check_inputs.py verifies it).                                   |
+//|  Keep the input order in sync with the EA:                       |
+//|  python3 mt5/tools/check_inputs.py                               |
 //+------------------------------------------------------------------+
 #property copyright   "Trading-signals67"
 #property link        "https://github.com/maung5678/Trading-signals67"
-#property version     "1.10"
-#property description "Supertrend TP/SL v1.10: สัญญาณ BUY/SELL บนแท่งที่ปิดแล้ว พร้อม Entry, SL, TP1–TP3 และแดชบอร์ด"
+#property version     "1.11"
+#property description "Supertrend TP/SL v1.11: สัญญาณ BUY/SELL บนแท่งที่ปิดแล้ว พร้อม Entry, SL, TP1–TP3 และแดชบอร์ด"
 #property indicator_chart_window
-#property indicator_buffers 29
+#property indicator_buffers 22
 #property indicator_plots   17
 
 #property indicator_label1  "Supertrend ขาขึ้น"
@@ -77,7 +78,7 @@
 #property indicator_label17 "ADX"
 #property indicator_type17  DRAW_NONE
 
-#define IND_VERSION "1.10"
+#define IND_VERSION "1.11"
 
 enum ENUM_DASH_MODE
   {
@@ -94,6 +95,13 @@ enum ENUM_STATS_PERIOD
    STATS_1W = 3,   // 1 สัปดาห์ล่าสุด
    STATS_1M = 4,   // 1 เดือนล่าสุด (30 วัน)
    STATS_ALL = 5   // ทั้งหมดที่คำนวณ
+  };
+
+enum ENUM_LOG_LEVEL
+  {
+   LOG_ERRORS = 0, // เฉพาะข้อผิดพลาด
+   LOG_NORMAL = 1, // ปกติ
+   LOG_DETAIL = 2  // ละเอียด (ใช้ตอนทดสอบ / ส่งให้ตรวจ)
   };
 
 //--- Inputs. Order matters: the EA passes them by position (colors last, not passed).
@@ -119,9 +127,12 @@ input int               InpMaxBars           = 5000;  // จำนวนแท�
 input int               InpObjectBars        = 1500;  // วาดป้ายย้อนหลังกี่แท่ง
 input group "แดชบอร์ด"
 input bool              InpHideAllDashboards = false;              // ซ่อนแดชบอร์ดทั้งหมด
-input ENUM_DASH_MODE    InpStatsMode         = DASH_COMPACT;       // สถิติชนะ/แพ้
+input ENUM_DASH_MODE    InpStatsMode         = DASH_COMPACT;       // สถิติชนะ/แพ้ (TF ของกราฟ)
 input ENUM_STATS_PERIOD InpStatsPeriod       = STATS_ALL;          // ช่วงเวลาของสถิติ
 input ENUM_BASE_CORNER  InpStatsCorner       = CORNER_RIGHT_UPPER; // ตำแหน่งสถิติ
+input ENUM_DASH_MODE    InpTfStatsMode       = DASH_FULL;          // ตารางเทียบอัตราชนะหลาย TF
+input int               InpTfStatsDays       = 30;                 // ตารางเทียบ: นับย้อนหลังกี่วัน
+input ENUM_BASE_CORNER  InpTfStatsCorner     = CORNER_LEFT_LOWER;  // ตำแหน่งตารางเทียบ
 input ENUM_DASH_MODE    InpAdxMode           = DASH_COMPACT;       // แดชบอร์ด ADX
 input ENUM_BASE_CORNER  InpAdxCorner         = CORNER_RIGHT_UPPER; // ตำแหน่ง ADX
 input ENUM_DASH_MODE    InpMtfMode           = DASH_COMPACT;       // เทรนด์หลายไทม์เฟรม
@@ -159,6 +170,9 @@ input int               InpAdxSmoothing      = 14;    // ADX: การปรั
 input double            InpAdxRangeLevel     = 20.0;  // ADX ต่ำกว่านี้ = ไซด์เวย์
 input double            InpAdxStrongLevel    = 25.0;  // ADX ตั้งแต่นี้ = เทรนด์แรง
 input double            InpNeutralZone       = 10.0;  // โซนกลาง ± (หลายไทม์เฟรม)
+input group "ระบบ"
+input bool              InpDrawObjects       = true;        // วาดป้าย เส้น และแดชบอร์ดบนกราฟ (EA ปิดในตัวที่ใช้เทรด)
+input ENUM_LOG_LEVEL    InpLogLevel          = LOG_NORMAL;  // ระดับ log (แท็บ Experts)
 input group "สี"
 input color             InpUpColor           = C'8,153,129';   // ขาขึ้น
 input color             InpDownColor         = C'242,54,69';   // ขาลง
@@ -173,55 +187,38 @@ input color             InpSupportColor      = C'8,153,129';   // เส้น�
 input color             InpResistanceColor   = C'242,54,69';   // เส้นแนวต้าน
 input color             InpChannelColor      = C'91,156,246';  // กรอบราคา
 
-//--- Buffers
+//--- Plot buffers (EA reads 3 and 13..21)
 double B_stUp[], B_stDn[], B_fillClose[], B_st[];
 double B_cO[], B_cH[], B_cL[], B_cC[], B_cClr[];
 double B_buy[], B_sell[], B_ema200[], B_emaRe[];
 double B_sig[], B_entry[], B_sl[], B_tp1[], B_tp2[], B_tp3[], B_dir[], B_atr[], B_adx[];
-double B_upper[], B_lower[], B_trur[], B_plusS[], B_minusS[], B_dx[], B_adxRaw[];
 
-//--- One virtual trade per signal (same model as the TradingView statistics).
-struct TradeRec
+//+------------------------------------------------------------------+
+//| Logging                                                          |
+//+------------------------------------------------------------------+
+string g_logTag = "[ST67][IND]";
+string g_onceKeys[];
+
+void Log(const ENUM_LOG_LEVEL level, const string msg)
   {
-   datetime          time;       // signal candle open time
-   int               side;       // 1 = BUY, -1 = SELL
-   bool              resolved;   // win/loss known
-   bool              win;
-   double            statR;      // R for the statistics (TP1 = win, SL = -1, reversal = real R)
-   bool              histDone;   // outcome for the history table recorded
-   string            outcome;    // TP1 / TP2 / TP3 / TP2→SL / SL / REV
-   double            histR;
-   bool              slHit;
-  };
+   if(level <= InpLogLevel)
+      Print(g_logTag, " ", msg);
+  }
 
-TradeRec g_recs[];
-int      g_recCount = 0;
-
-//--- State
-string   g_prefix = "";
-int      g_first = 0;          // first calculated bar
-int      g_lastClosed = -1;    // last closed bar run through the trade logic
-int      g_tDir = 0;
-double   g_entry = EMPTY_VALUE, g_sl = EMPTY_VALUE, g_tp1 = EMPTY_VALUE, g_tp2 = EMPTY_VALUE, g_tp3 = EMPTY_VALUE;
-int      g_tradeBar = -1;
-bool     g_tp1Reached = false, g_tp2Reached = false, g_tp3Reached = false;
-bool     g_resolved = false, g_histRecorded = false;
-bool     g_reLongArmed = false, g_reShortArmed = false, g_emaLongPull = false, g_emaShortPull = false;
-// Pivots (bar indexes, -1 = none)
-double   g_prevSupP = EMPTY_VALUE, g_lastSupP = EMPTY_VALUE, g_prevResP = EMPTY_VALUE, g_lastResP = EMPTY_VALUE;
-int      g_prevSupB = -1, g_lastSupB = -1, g_prevResB = -1, g_lastResB = -1;
-// Key levels
-double   g_kSupPrice[], g_kResPrice[];
-int      g_kSupBar[], g_kResBar[];
-// Higher-timeframe filter
-bool     g_htfOn = false;
-datetime g_htfTime[];
-int      g_htfDir[];
-// Values for the dashboards (updated in OnCalculate, also used by OnTimer)
-double   g_dashAdx = EMPTY_VALUE, g_dashPlusDi = EMPTY_VALUE, g_dashMinusDi = EMPTY_VALUE;
-int      g_dashDir = 0;
-datetime g_dashNow = 0;
-bool     g_haveData = false;
+// Log a message only the first time `key` is seen (avoids flooding the journal).
+void LogOnce(const ENUM_LOG_LEVEL level, const string key, const string msg)
+  {
+   int n = ArraySize(g_onceKeys);
+   for(int i = 0; i < n; i++)
+      if(g_onceKeys[i] == key)
+         return;
+   if(n < 500)
+     {
+      ArrayResize(g_onceKeys, n + 1);
+      g_onceKeys[n] = key;
+     }
+   Log(level, msg);
+  }
 
 //+------------------------------------------------------------------+
 //| Helpers                                                          |
@@ -247,73 +244,16 @@ string TfName(const ENUM_TIMEFRAMES tf)
 
 void Notify(const string msg)
   {
+   Log(LOG_NORMAL, msg);
    if(InpAlertPopup)
       Alert(msg);
    if(InpAlertPush && !MQLInfoInteger(MQL_TESTER))
       SendNotification(StringSubstr(msg, 0, 255));
   }
 
-//--- Chart objects
-void ObjText(const string name, const datetime t, const double price, const string text, const color clr,
-             const int size, const ENUM_ANCHOR_POINT anchor, const string tip = "")
-  {
-   if(ObjectFind(0, name) < 0)
-      ObjectCreate(0, name, OBJ_TEXT, 0, t, price);
-   ObjectSetInteger(0, name, OBJPROP_TIME, 0, t);
-   ObjectSetDouble(0, name, OBJPROP_PRICE, 0, price);
-   ObjectSetString(0, name, OBJPROP_TEXT, text);
-   ObjectSetString(0, name, OBJPROP_FONT, "Tahoma");
-   ObjectSetInteger(0, name, OBJPROP_FONTSIZE, size);
-   ObjectSetInteger(0, name, OBJPROP_COLOR, clr);
-   ObjectSetInteger(0, name, OBJPROP_ANCHOR, anchor);
-   ObjectSetInteger(0, name, OBJPROP_SELECTABLE, false);
-   ObjectSetInteger(0, name, OBJPROP_HIDDEN, true);
-   ObjectSetString(0, name, OBJPROP_TOOLTIP, tip == "" ? text : tip);
-  }
-
-void ObjLine(const string name, const datetime t1, const double p1, const datetime t2, const double p2,
-             const color clr, const ENUM_LINE_STYLE style, const int width, const bool rayRight)
-  {
-   if(ObjectFind(0, name) < 0)
-      ObjectCreate(0, name, OBJ_TREND, 0, t1, p1, t2, p2);
-   ObjectSetInteger(0, name, OBJPROP_TIME, 0, t1);
-   ObjectSetDouble(0, name, OBJPROP_PRICE, 0, p1);
-   ObjectSetInteger(0, name, OBJPROP_TIME, 1, t2);
-   ObjectSetDouble(0, name, OBJPROP_PRICE, 1, p2);
-   ObjectSetInteger(0, name, OBJPROP_COLOR, clr);
-   ObjectSetInteger(0, name, OBJPROP_STYLE, style);
-   ObjectSetInteger(0, name, OBJPROP_WIDTH, width);
-   ObjectSetInteger(0, name, OBJPROP_RAY_RIGHT, rayRight);
-   ObjectSetInteger(0, name, OBJPROP_RAY_LEFT, false);
-   ObjectSetInteger(0, name, OBJPROP_SELECTABLE, false);
-   ObjectSetInteger(0, name, OBJPROP_HIDDEN, true);
-   ObjectSetInteger(0, name, OBJPROP_BACK, false);
-  }
-
-void ObjBox(const string name, const datetime t1, const double p1, const datetime t2, const double p2, const color clr)
-  {
-   if(ObjectFind(0, name) < 0)
-      ObjectCreate(0, name, OBJ_RECTANGLE, 0, t1, p1, t2, p2);
-   ObjectSetInteger(0, name, OBJPROP_TIME, 0, t1);
-   ObjectSetDouble(0, name, OBJPROP_PRICE, 0, p1);
-   ObjectSetInteger(0, name, OBJPROP_TIME, 1, t2);
-   ObjectSetDouble(0, name, OBJPROP_PRICE, 1, p2);
-   ObjectSetInteger(0, name, OBJPROP_COLOR, clr);
-   ObjectSetInteger(0, name, OBJPROP_FILL, true);
-   ObjectSetInteger(0, name, OBJPROP_BACK, true);
-   ObjectSetInteger(0, name, OBJPROP_SELECTABLE, false);
-   ObjectSetInteger(0, name, OBJPROP_HIDDEN, true);
-  }
-
-void ObjDelete(const string name)
-  {
-   if(ObjectFind(0, name) >= 0)
-      ObjectDelete(0, name);
-  }
-
 //+------------------------------------------------------------------+
 //| Indicator math on MqlRates arrays (index 0 = oldest).            |
-//| Used for the higher-timeframe filter and the MTF dashboard.      |
+//| Used for the higher-timeframe filter and the MTF trend table.    |
 //| Same formulas as TradingView ta.rma / ta.supertrend / ta.dmi.    |
 //+------------------------------------------------------------------+
 double RatesTr(const MqlRates &r[], const int i)
@@ -381,10 +321,11 @@ void RatesSupertrend(const MqlRates &r[], int &dir[])
       int d;
       if(i == 0 || atr[i - 1] == EMPTY_VALUE)
          d = 1;
-      else if(stPrev == upperPrev)
-         d = r[i].close > upper ? -1 : 1;
       else
-         d = r[i].close < lower ? 1 : -1;
+         if(stPrev == upperPrev)
+            d = r[i].close > upper ? -1 : 1;
+         else
+            d = r[i].close < lower ? 1 : -1;
       double st = d == -1 ? lower : upper;
       dir[i] = d;
       upperPrev = upper;
@@ -432,639 +373,826 @@ double RatesAdxLast(const MqlRates &r[])
    return (n == 0 || sm[n - 1] == EMPTY_VALUE) ? EMPTY_VALUE : 100.0 * sm[n - 1];
   }
 
-//--- Higher-timeframe direction of the last HTF candle closed at `t` (no repaint).
-bool LoadHtf(const datetime fromTime)
+//+------------------------------------------------------------------+
+//| Signal engine: indicator values, signals and the virtual trade   |
+//| (same model as the TradingView statistics). Arrays: index 0 =    |
+//| oldest bar. Used for the chart and for each row of the win-rate  |
+//| per timeframe table.                                             |
+//+------------------------------------------------------------------+
+struct TradeRec
   {
-   MqlRates h[];
-   int secs = PeriodSeconds(InpHtfFilterTf);
-   datetime from = (datetime)((long)fromTime - (long)secs * (InpAtrPeriod * 20 + 50));
-   datetime to = (datetime)((long)TimeCurrent() + secs);
-   int got = CopyRates(_Symbol, InpHtfFilterTf, from, to, h);
-   if(got < InpAtrPeriod + 3)
-      return false;
-   int dir[];
-   RatesSupertrend(h, dir);
-   ArrayResize(g_htfTime, got);
-   ArrayResize(g_htfDir, got);
-   for(int j = 0; j < got; j++)
+   datetime          time;       // signal candle open time
+   int               side;       // 1 = BUY, -1 = SELL
+   bool              resolved;   // win/loss known
+   bool              win;
+   double            statR;      // R for the statistics (TP1 = win, SL = -1, reversal = real R)
+   bool              histDone;   // outcome for the history table recorded
+   string            outcome;    // TP1 / TP2 / TP3 / TP2→SL / SL / REV
+   double            histR;
+   bool              slHit;
+  };
+
+// What happened on one closed candle (used for drawing and alerts).
+struct BarEvents
+  {
+   bool              buy;
+   bool              sell;
+   bool              tpHit[3];
+   double            tpPrice[3];
+   bool              slHit;
+   double            slPrice;
+  };
+
+void ClearEvents(BarEvents &ev)
+  {
+   ev.buy = false;
+   ev.sell = false;
+   for(int k = 0; k < 3; k++)
      {
-      g_htfTime[j] = h[j].time;
-      g_htfDir[j] = dir[j];
+      ev.tpHit[k] = false;
+      ev.tpPrice[k] = 0.0;
      }
-   return true;
+   ev.slHit = false;
+   ev.slPrice = 0.0;
   }
 
-int HtfDirAt(const datetime barOpen)
+class CEngine
   {
-   int n = ArraySize(g_htfTime);
-   int secs = PeriodSeconds(InpHtfFilterTf);
-   int lo = 0, hi = n - 1, found = -1;
-   while(lo <= hi)
+public:
+   ENUM_TIMEFRAMES   tf;
+   int               first;        // first calculated bar
+   int               lastClosed;   // last closed bar run through Closed()
+   bool              htfOn;
+   datetime          htfTime[];
+   int               htfDir[];
+   //--- series
+   double            atr[], upper[], lower[], st[], dir[], trur[], ps[], ms[], dx[], adxRaw[], adx[], ema200[], emaRe[];
+   //--- virtual trade
+   int               tDir;
+   double            entry, sl, tp1, tp2, tp3;
+   int               tradeBar;
+   bool              tp1Reached, tp2Reached, tp3Reached, resolved, histRecorded;
+   bool              reLongArmed, reShortArmed, emaLongPull, emaShortPull;
+   //--- pivots (bar indexes, -1 = none)
+   double            prevSupP, lastSupP, prevResP, lastResP;
+   int               prevSupB, lastSupB, prevResB, lastResB;
+   double            kSupPrice[], kResPrice[];
+   int               kSupBar[], kResBar[];
+   //--- records
+   TradeRec          recs[];
+   int               recCount;
+
+   void              Init(const ENUM_TIMEFRAMES timeframe)
      {
-      int mid = (lo + hi) / 2;
-      if((long)g_htfTime[mid] + secs <= (long)barOpen)
+      tf = timeframe;
+      htfOn = InpHtfFilterTf != PERIOD_CURRENT && PeriodSeconds(InpHtfFilterTf) > PeriodSeconds(timeframe);
+     }
+
+   void              Resize(const int total)
+     {
+      ArrayResize(atr, total, 1000);
+      ArrayResize(upper, total, 1000);
+      ArrayResize(lower, total, 1000);
+      ArrayResize(st, total, 1000);
+      ArrayResize(dir, total, 1000);
+      ArrayResize(trur, total, 1000);
+      ArrayResize(ps, total, 1000);
+      ArrayResize(ms, total, 1000);
+      ArrayResize(dx, total, 1000);
+      ArrayResize(adxRaw, total, 1000);
+      ArrayResize(adx, total, 1000);
+      ArrayResize(ema200, total, 1000);
+      ArrayResize(emaRe, total, 1000);
+     }
+
+   void              Reset(const int total, const int firstBar)
+     {
+      Resize(total);
+      first = firstBar;
+      lastClosed = firstBar;   // the first bar has no previous bar for a signal
+      tDir = 0;
+      entry = EMPTY_VALUE;
+      sl = EMPTY_VALUE;
+      tp1 = EMPTY_VALUE;
+      tp2 = EMPTY_VALUE;
+      tp3 = EMPTY_VALUE;
+      tradeBar = -1;
+      tp1Reached = false;
+      tp2Reached = false;
+      tp3Reached = false;
+      resolved = false;
+      histRecorded = false;
+      reLongArmed = false;
+      reShortArmed = false;
+      emaLongPull = false;
+      emaShortPull = false;
+      prevSupP = EMPTY_VALUE;
+      lastSupP = EMPTY_VALUE;
+      prevResP = EMPTY_VALUE;
+      lastResP = EMPTY_VALUE;
+      prevSupB = -1;
+      lastSupB = -1;
+      prevResB = -1;
+      lastResB = -1;
+      ArrayResize(kSupPrice, 0);
+      ArrayResize(kResPrice, 0);
+      ArrayResize(kSupBar, 0);
+      ArrayResize(kResBar, 0);
+      ArrayResize(recs, 0);
+      recCount = 0;
+      for(int i = 0; i < firstBar && i < total; i++)
         {
-         found = mid;
-         lo = mid + 1;
+         atr[i] = EMPTY_VALUE;
+         upper[i] = EMPTY_VALUE;
+         lower[i] = EMPTY_VALUE;
+         st[i] = EMPTY_VALUE;
+         dir[i] = 0.0;
+         trur[i] = EMPTY_VALUE;
+         ps[i] = EMPTY_VALUE;
+         ms[i] = EMPTY_VALUE;
+         dx[i] = EMPTY_VALUE;
+         adxRaw[i] = EMPTY_VALUE;
+         adx[i] = EMPTY_VALUE;
+         ema200[i] = EMPTY_VALUE;
+         emaRe[i] = EMPTY_VALUE;
         }
-      else
-         hi = mid - 1;
      }
-   return found < 0 ? 0 : g_htfDir[found];
-  }
 
-//+------------------------------------------------------------------+
-//| Per-bar calculation on the chart (incremental, index 0 = oldest) |
-//+------------------------------------------------------------------+
-double TrAt(const int i, const double &h[], const double &l[], const double &c[])
-  {
-   if(i <= g_first)
-      return h[i] - l[i];
-   return MathMax(h[i] - l[i], MathMax(MathAbs(h[i] - c[i - 1]), MathAbs(l[i] - c[i - 1])));
-  }
-
-double PlusDmAt(const int i, const double &h[], const double &l[])
-  {
-   double up = h[i] - h[i - 1], down = l[i - 1] - l[i];
-   return (up > down && up > 0.0) ? up : 0.0;
-  }
-
-double MinusDmAt(const int i, const double &h[], const double &l[])
-  {
-   double up = h[i] - h[i - 1], down = l[i - 1] - l[i];
-   return (down > up && down > 0.0) ? down : 0.0;
-  }
-
-// TradingView ta.ema: seeded with an SMA of the first `len` closes.
-double EmaAt(const int i, const int len, const double &c[], const double &buf[])
-  {
-   int k = i - g_first;
-   if(k < len - 1)
-      return EMPTY_VALUE;
-   if(k == len - 1)
+   //--- Higher-timeframe direction of the last HTF candle closed when `barOpen` started (no repaint).
+   bool              LoadHtf(const datetime fromTime)
      {
-      double s = 0.0;
-      for(int j = i - len + 1; j <= i; j++)
-         s += c[j];
-      return s / len;
+      MqlRates h[];
+      int secs = PeriodSeconds(InpHtfFilterTf);
+      datetime from = (datetime)((long)fromTime - (long)secs * (InpAtrPeriod * 20 + 50));
+      datetime to = (datetime)((long)TimeCurrent() + secs);
+      int got = CopyRates(_Symbol, InpHtfFilterTf, from, to, h);
+      if(got < InpAtrPeriod + 3)
+        {
+         Log(LOG_NORMAL, StringFormat("ข้อมูล TF ใหญ่ %s ยังไม่พร้อม (ได้ %d แท่ง, error %d) จะลองใหม่", TfName(InpHtfFilterTf), got, GetLastError()));
+         return false;
+        }
+      int d[];
+      RatesSupertrend(h, d);
+      ArrayResize(htfTime, got);
+      ArrayResize(htfDir, got);
+      for(int j = 0; j < got; j++)
+        {
+         htfTime[j] = h[j].time;
+         htfDir[j] = d[j];
+        }
+      return true;
      }
-   if(buf[i - 1] == EMPTY_VALUE)
-      return EMPTY_VALUE;
-   double alpha = 2.0 / (len + 1);
-   return alpha * c[i] + (1.0 - alpha) * buf[i - 1];
-  }
 
-void StepBar(const int i, const double &o[], const double &h[], const double &l[], const double &c[])
-  {
-   int k = i - g_first;
-   int p = InpAtrPeriod;
-   //--- ATR (RMA)
-   double atr = EMPTY_VALUE;
-   if(k == p - 1)
+   int               HtfDirAt(const datetime barOpen)
      {
-      double s = 0.0;
-      for(int j = i - p + 1; j <= i; j++)
-         s += TrAt(j, h, l, c);
-      atr = s / p;
-     }
-   else
-      if(k >= p && B_atr[i - 1] != EMPTY_VALUE)
-         atr = (B_atr[i - 1] * (p - 1) + TrAt(i, h, l, c)) / p;
-   B_atr[i] = atr;
-
-   //--- Supertrend
-   int d = 0;
-   double st = EMPTY_VALUE;
-   B_upper[i] = EMPTY_VALUE;
-   B_lower[i] = EMPTY_VALUE;
-   if(atr != EMPTY_VALUE)
-     {
-      double upPrev = (k > 0 && B_upper[i - 1] != EMPTY_VALUE) ? B_upper[i - 1] : 0.0;
-      double loPrev = (k > 0 && B_lower[i - 1] != EMPTY_VALUE) ? B_lower[i - 1] : 0.0;
-      double src = (h[i] + l[i]) / 2.0;
-      double upper = src + InpFactor * atr;
-      double lower = src - InpFactor * atr;
-      double prevClose = k > 0 ? c[i - 1] : c[i];
-      lower = (lower > loPrev || prevClose < loPrev) ? lower : loPrev;
-      upper = (upper < upPrev || prevClose > upPrev) ? upper : upPrev;
-      if(k == 0 || B_atr[i - 1] == EMPTY_VALUE)
-         d = 1;
-      else
-         if(B_st[i - 1] == B_upper[i - 1])
-            d = c[i] > upper ? -1 : 1;
+      int n = ArraySize(htfTime);
+      int secs = PeriodSeconds(InpHtfFilterTf);
+      int lo = 0, hi = n - 1, found = -1;
+      while(lo <= hi)
+        {
+         int mid = (lo + hi) / 2;
+         if((long)htfTime[mid] + secs <= (long)barOpen)
+           {
+            found = mid;
+            lo = mid + 1;
+           }
          else
-            d = c[i] < lower ? 1 : -1;
-      st = d == -1 ? lower : upper;
-      B_upper[i] = upper;
-      B_lower[i] = lower;
-     }
-   B_st[i] = st;
-   B_dir[i] = d;
-   B_fillClose[i] = st == EMPTY_VALUE ? EMPTY_VALUE : c[i];
-   B_stUp[i] = (InpShowTrendLine && d < 0) ? st : EMPTY_VALUE;
-   B_stDn[i] = (InpShowTrendLine && d > 0) ? st : EMPTY_VALUE;
-
-   //--- Candles (also redrawn when only the fill is on, so the fill does not hide them)
-   if(InpShowCandleColors || InpShowFill)
-     {
-      B_cO[i] = o[i];
-      B_cH[i] = h[i];
-      B_cL[i] = l[i];
-      B_cC[i] = c[i];
-      if(InpShowCandleColors)
-         B_cClr[i] = d < 0 ? 0.0 : d > 0 ? 1.0 : (c[i] >= o[i] ? 0.0 : 1.0);
-      else
-         B_cClr[i] = c[i] >= o[i] ? 0.0 : 1.0;
-     }
-   else
-     {
-      B_cO[i] = EMPTY_VALUE;
-      B_cH[i] = EMPTY_VALUE;
-      B_cL[i] = EMPTY_VALUE;
-      B_cC[i] = EMPTY_VALUE;
-      B_cClr[i] = 0.0;
-     }
-
-   //--- ADX (ta.dmi)
-   int L = InpAdxLength, S = InpAdxSmoothing;
-   double trur = EMPTY_VALUE, ps = EMPTY_VALUE, ms = EMPTY_VALUE;
-   if(k == L - 1)
-     {
-      double s = 0.0;
-      for(int j = i - L + 1; j <= i; j++)
-         s += TrAt(j, h, l, c);
-      trur = s / L;
-     }
-   else
-      if(k >= L && B_trur[i - 1] != EMPTY_VALUE)
-         trur = (B_trur[i - 1] * (L - 1) + TrAt(i, h, l, c)) / L;
-   if(k == L)
-     {
-      double sp = 0.0, sm = 0.0;
-      for(int j = i - L + 1; j <= i; j++)
-        {
-         sp += PlusDmAt(j, h, l);
-         sm += MinusDmAt(j, h, l);
+            hi = mid - 1;
         }
-      ps = sp / L;
-      ms = sm / L;
+      return found < 0 ? 0 : htfDir[found];
      }
-   else
-      if(k > L && B_plusS[i - 1] != EMPTY_VALUE)
-        {
-         ps = (B_plusS[i - 1] * (L - 1) + PlusDmAt(i, h, l)) / L;
-         ms = (B_minusS[i - 1] * (L - 1) + MinusDmAt(i, h, l)) / L;
-        }
-   B_trur[i] = trur;
-   B_plusS[i] = ps;
-   B_minusS[i] = ms;
-   double dx = EMPTY_VALUE;
-   if(trur != EMPTY_VALUE && ps != EMPTY_VALUE)
+
+   double            TrAt(const int i, const double &h[], const double &l[], const double &c[])
      {
-      if(trur == 0.0)
-         dx = 0.0;
-      else
-        {
-         double pdi = 100.0 * ps / trur, mdi = 100.0 * ms / trur;
-         double sum = pdi + mdi;
-         dx = MathAbs(pdi - mdi) / (sum != 0.0 ? sum : 1.0);
-        }
+      if(i <= first)
+         return h[i] - l[i];
+      return MathMax(h[i] - l[i], MathMax(MathAbs(h[i] - c[i - 1]), MathAbs(l[i] - c[i - 1])));
      }
-   B_dx[i] = dx;
-   double adxRaw = EMPTY_VALUE;
-   if(k == L + S - 1)
+
+   double            PlusDmAt(const int i, const double &h[], const double &l[])
      {
-      double s = 0.0;
-      bool ok = true;
-      for(int j = i - S + 1; j <= i; j++)
-        {
-         if(B_dx[j] == EMPTY_VALUE)
-            ok = false;
-         else
-            s += B_dx[j];
-        }
-      if(ok)
-         adxRaw = s / S;
+      double up = h[i] - h[i - 1], down = l[i - 1] - l[i];
+      return (up > down && up > 0.0) ? up : 0.0;
      }
-   else
-      if(k > L + S - 1 && B_adxRaw[i - 1] != EMPTY_VALUE)
-         adxRaw = dx == EMPTY_VALUE ? B_adxRaw[i - 1] : (B_adxRaw[i - 1] * (S - 1) + dx) / S;
-   B_adxRaw[i] = adxRaw;
-   B_adx[i] = adxRaw == EMPTY_VALUE ? EMPTY_VALUE : 100.0 * adxRaw;
 
-   //--- EMAs
-   B_ema200[i] = EmaAt(i, 200, c, B_ema200);
-   B_emaRe[i] = EmaAt(i, MathMax(1, InpReentryEmaLength), c, B_emaRe);
-
-   //--- Signal outputs: filled by ProcessClosedBar on closed candles only.
-   B_sig[i] = 0.0;
-   B_buy[i] = EMPTY_VALUE;
-   B_sell[i] = EMPTY_VALUE;
-   B_entry[i] = EMPTY_VALUE;
-   B_sl[i] = EMPTY_VALUE;
-   B_tp1[i] = EMPTY_VALUE;
-   B_tp2[i] = EMPTY_VALUE;
-   B_tp3[i] = EMPTY_VALUE;
-  }
-
-//+------------------------------------------------------------------+
-//| Virtual trade bookkeeping (statistics + history table)           |
-//+------------------------------------------------------------------+
-void RecResolve(const double r, const bool win)
-  {
-   if(g_recCount == 0)
-      return;
-   int n = g_recCount - 1;
-   g_recs[n].resolved = true;
-   g_recs[n].win = win;
-   g_recs[n].statR = r;
-  }
-
-void RecHistory(const string outcome, const double r, const bool slHit)
-  {
-   if(g_histRecorded || g_recCount == 0)
-      return;
-   int n = g_recCount - 1;
-   g_recs[n].histDone = true;
-   g_recs[n].outcome = outcome;
-   g_recs[n].histR = r;
-   g_recs[n].slHit = slHit;
-   g_histRecorded = true;
-  }
-
-void NewTrade(const int side, const int i, const datetime t, const double c, const double atr)
-  {
-   g_entry = c;
-   double risk = atr * InpSlAtrMult;
-   g_sl = c - side * risk;
-   g_tp1 = c + side * risk * InpTp1R;
-   g_tp2 = c + side * risk * InpTp2R;
-   g_tp3 = c + side * risk * InpTp3R;
-   g_tDir = side;
-   g_tradeBar = i;
-   g_tp1Reached = false;
-   g_tp2Reached = false;
-   g_tp3Reached = false;
-   g_resolved = false;
-   g_histRecorded = false;
-   g_reLongArmed = false;
-   g_reShortArmed = false;
-   g_emaLongPull = false;
-   g_emaShortPull = false;
-   if(g_recCount >= ArraySize(g_recs))
-      ArrayResize(g_recs, g_recCount + 256);
-   g_recs[g_recCount].time = t;
-   g_recs[g_recCount].side = side;
-   g_recs[g_recCount].resolved = false;
-   g_recs[g_recCount].win = false;
-   g_recs[g_recCount].statR = 0.0;
-   g_recs[g_recCount].histDone = false;
-   g_recs[g_recCount].outcome = "";
-   g_recs[g_recCount].histR = 0.0;
-   g_recs[g_recCount].slHit = false;
-   g_recCount++;
-  }
-
-string MaxTpText()
-  {
-   return g_tp3Reached ? "TP3" : g_tp2Reached ? "TP2" : "TP1";
-  }
-
-double MaxTpR()
-  {
-   return g_tp3Reached ? InpTp3R : g_tp2Reached ? InpTp2R : InpTp1R;
-  }
-
-//--- Pivot confirmed on bar i (pivot bar = i - L). Left side strictly lower/higher.
-double PivotHighAt(const int i, const double &h[])
-  {
-   int L = InpPivotLength, p = i - L;
-   if(p - L < g_first)
-      return EMPTY_VALUE;
-   for(int j = p - L; j <= p + L; j++)
+   double            MinusDmAt(const int i, const double &h[], const double &l[])
      {
-      if(j == p)
-         continue;
-      if(j < p ? h[j] >= h[p] : h[j] > h[p])
+      double up = h[i] - h[i - 1], down = l[i - 1] - l[i];
+      return (down > up && down > 0.0) ? down : 0.0;
+     }
+
+   // TradingView ta.ema: seeded with an SMA of the first `len` closes.
+   double            EmaAt(const int i, const int len, const double &c[], const double &buf[])
+     {
+      int k = i - first;
+      if(k < len - 1)
          return EMPTY_VALUE;
-     }
-   return h[p];
-  }
-
-double PivotLowAt(const int i, const double &l[])
-  {
-   int L = InpPivotLength, p = i - L;
-   if(p - L < g_first)
-      return EMPTY_VALUE;
-   for(int j = p - L; j <= p + L; j++)
-     {
-      if(j == p)
-         continue;
-      if(j < p ? l[j] <= l[p] : l[j] < l[p])
-         return EMPTY_VALUE;
-     }
-   return l[p];
-  }
-
-// Value of the line through two pivots at bar x (EMPTY if no line).
-double LineAt(const int b1, const double p1, const int b2, const double p2, const int x)
-  {
-   if(b1 < 0 || b2 < 0 || b1 == b2 || p1 == EMPTY_VALUE || p2 == EMPTY_VALUE)
-      return EMPTY_VALUE;
-   return p1 + (p2 - p1) / (b2 - b1) * (x - b1);
-  }
-
-// Upper / lower breakout boundaries at bar x (same construction as the TradingView script).
-void BreakoutBounds(const int x, double &upper, double &lower)
-  {
-   double supNow = LineAt(g_prevSupB, g_prevSupP, g_lastSupB, g_lastSupP, x);
-   double resNow = LineAt(g_prevResB, g_prevResP, g_lastResB, g_lastResP, x);
-   double supAtRes = g_lastResB >= 0 ? LineAt(g_prevSupB, g_prevSupP, g_lastSupB, g_lastSupP, g_lastResB) : EMPTY_VALUE;
-   double resAtSup = g_lastSupB >= 0 ? LineAt(g_prevResB, g_prevResP, g_lastResB, g_lastResP, g_lastSupB) : EMPTY_VALUE;
-   double upWidth = (supAtRes != EMPTY_VALUE && g_lastResP != EMPTY_VALUE) ? g_lastResP - supAtRes : EMPTY_VALUE;
-   double downWidth = (resAtSup != EMPTY_VALUE && g_lastSupP != EMPTY_VALUE) ? resAtSup - g_lastSupP : EMPTY_VALUE;
-   bool upValid = upWidth != EMPTY_VALUE && upWidth > 0.0 && supNow != EMPTY_VALUE;
-   bool downValid = downWidth != EMPTY_VALUE && downWidth > 0.0 && resNow != EMPTY_VALUE;
-   upper = upValid ? supNow + upWidth : resNow;
-   lower = downValid ? resNow - downWidth : supNow;
-  }
-
-void AddKeyLevel(double &prices[], int &bars[], const double price, const int bar, const double tol)
-  {
-   int n = ArraySize(prices);
-   int match = -1;
-   double best = 0.0;
-   for(int j = 0; j < n; j++)
-     {
-      double dist = MathAbs(prices[j] - price);
-      if(dist <= tol && (match < 0 || dist < best))
+      if(k == len - 1)
         {
-         match = j;
-         best = dist;
+         double s = 0.0;
+         for(int j = i - len + 1; j <= i; j++)
+            s += c[j];
+         return s / len;
         }
-     }
-   if(match >= 0)
-     {
-      prices[match] = (prices[match] + price) / 2.0;
-      return;
-     }
-   // newest first
-   ArrayResize(prices, n + 1);
-   ArrayResize(bars, n + 1);
-   for(int j = n; j > 0; j--)
-     {
-      prices[j] = prices[j - 1];
-      bars[j] = bars[j - 1];
-     }
-   prices[0] = price;
-   bars[0] = bar;
-   if(ArraySize(prices) > InpKeyLevelsCount)
-     {
-      ArrayResize(prices, InpKeyLevelsCount);
-      ArrayResize(bars, InpKeyLevelsCount);
-     }
-  }
-
-//+------------------------------------------------------------------+
-//| Signals and the virtual trade on a closed candle                 |
-//+------------------------------------------------------------------+
-void ProcessClosedBar(const int i, const int ratesTotal, const datetime &time[], const double &h[],
-                      const double &l[], const double &c[], const bool live)
-  {
-   //--- Pivots confirmed on this bar
-   int L = InpPivotLength;
-   double pivHigh = PivotHighAt(i, h);
-   double pivLow = PivotLowAt(i, l);
-   if(pivLow != EMPTY_VALUE)
-     {
-      g_prevSupP = g_lastSupP;
-      g_prevSupB = g_lastSupB;
-      g_lastSupP = pivLow;
-      g_lastSupB = i - L;
-     }
-   if(pivHigh != EMPTY_VALUE)
-     {
-      g_prevResP = g_lastResP;
-      g_prevResB = g_lastResB;
-      g_lastResP = pivHigh;
-      g_lastResB = i - L;
+      if(buf[i - 1] == EMPTY_VALUE)
+         return EMPTY_VALUE;
+      double alpha = 2.0 / (len + 1);
+      return alpha * c[i] + (1.0 - alpha) * buf[i - 1];
      }
 
-   int dir = (int)B_dir[i];
-   int dirPrev = (int)B_dir[i - 1];
-   bool up = dir < 0, dn = dir > 0;
-   double st = B_st[i];
-   double ema = B_emaRe[i], emaPrev = B_emaRe[i - 1];
-   bool emaOk = ema != EMPTY_VALUE && emaPrev != EMPTY_VALUE;
-   bool emaCrossUp = emaOk && c[i] > ema && c[i - 1] <= emaPrev;
-   bool emaCrossDown = emaOk && c[i] < ema && c[i - 1] >= emaPrev;
-
-   bool stBuy = dir < 0 && dirPrev > 0;
-   bool stSell = dir > 0 && dirPrev < 0;
-   bool reBuy = InpReentrySt && g_reLongArmed && up && st != EMPTY_VALUE && l[i] <= st && c[i] > st;
-   bool reSell = InpReentrySt && g_reShortArmed && dn && st != EMPTY_VALUE && h[i] >= st && c[i] < st;
-   bool emaReBuy = InpReentryEma && g_reLongArmed && up && g_emaLongPull && emaCrossUp;
-   bool emaReSell = InpReentryEma && g_reShortArmed && dn && g_emaShortPull && emaCrossDown;
-   bool fastBuy = InpReentryEmaFast && g_reLongArmed && up && ema != EMPTY_VALUE && l[i] <= ema && c[i] > ema;
-   bool fastSell = InpReentryEmaFast && g_reShortArmed && dn && ema != EMPTY_VALUE && h[i] >= ema && c[i] < ema;
-   bool boBuy = false, boSell = false;
-   if(InpBreakoutSignals)
+   //--- Indicator values of bar i from bar i-1 (also called on every tick for the open candle).
+   void              Step(const int i, const double &h[], const double &l[], const double &c[])
      {
-      double upNow, loNow, upPrev, loPrev;
-      BreakoutBounds(i, upNow, loNow);
-      BreakoutBounds(i - 1, upPrev, loPrev);
-      boBuy = upNow != EMPTY_VALUE && upPrev != EMPTY_VALUE && c[i] > upNow && c[i - 1] <= upPrev;
-      boSell = loNow != EMPTY_VALUE && loPrev != EMPTY_VALUE && c[i] < loNow && c[i - 1] >= loPrev;
-     }
-
-   bool adxOk = !InpUseAdxFilter || (B_adx[i] != EMPTY_VALUE && B_adx[i] > InpAdxSignalMin);
-   bool emaLongOk = !InpUseEma200Filter || (B_ema200[i] != EMPTY_VALUE && c[i] > B_ema200[i]);
-   bool emaShortOk = !InpUseEma200Filter || (B_ema200[i] != EMPTY_VALUE && c[i] < B_ema200[i]);
-   bool htfLongOk = true, htfShortOk = true;
-   if(g_htfOn)
-     {
-      int hd = HtfDirAt(time[i]);
-      htfLongOk = hd < 0;
-      htfShortOk = hd > 0;
-     }
-   bool buy = (stBuy || boBuy || reBuy || emaReBuy || fastBuy) && adxOk && emaLongOk && htfLongOk;
-   bool sell = (stSell || boSell || reSell || emaReSell || fastSell) && adxOk && emaShortOk && htfShortOk;
-   if(InpReentryEma && g_reLongArmed && up && emaCrossDown)
-      g_emaLongPull = true;
-   if(InpReentryEma && g_reShortArmed && dn && emaCrossUp)
-      g_emaShortPull = true;
-
-   bool drawObjects = i >= ratesTotal - InpObjectBars;
-   string evTp = "";
-   double evTpPrice = 0.0;
-   bool evSl = false;
-   double evSlPrice = 0.0;
-
-   //--- Open virtual trade: SL first, then TP1 (statistics model: whole trade closed at TP1 / SL / reversal)
-   if(g_tDir != 0 && !g_resolved)
-     {
-      bool slHit = g_tDir == 1 ? l[i] <= g_sl : h[i] >= g_sl;
-      bool tp1Hit = g_tDir == 1 ? h[i] >= g_tp1 : l[i] <= g_tp1;
-      if(slHit)
+      int k = i - first;
+      int p = InpAtrPeriod;
+      double a = EMPTY_VALUE;
+      if(k == p - 1)
         {
-         evSl = true;
-         evSlPrice = g_sl;
-         RecResolve(-1.0, false);
-         RecHistory("SL", -1.0, true);
-         g_resolved = true;
-         g_tDir = 0;
+         double s = 0.0;
+         for(int j = i - p + 1; j <= i; j++)
+            s += TrAt(j, h, l, c);
+         a = s / p;
         }
       else
-         if(tp1Hit)
+         if(k >= p && atr[i - 1] != EMPTY_VALUE)
+            a = (atr[i - 1] * (p - 1) + TrAt(i, h, l, c)) / p;
+      atr[i] = a;
+
+      //--- Supertrend (ta.supertrend)
+      int d = 0;
+      double s1 = EMPTY_VALUE;
+      upper[i] = EMPTY_VALUE;
+      lower[i] = EMPTY_VALUE;
+      if(a != EMPTY_VALUE)
+        {
+         double upPrev = (k > 0 && upper[i - 1] != EMPTY_VALUE) ? upper[i - 1] : 0.0;
+         double loPrev = (k > 0 && lower[i - 1] != EMPTY_VALUE) ? lower[i - 1] : 0.0;
+         double src = (h[i] + l[i]) / 2.0;
+         double up = src + InpFactor * a;
+         double lo = src - InpFactor * a;
+         double prevClose = k > 0 ? c[i - 1] : c[i];
+         lo = (lo > loPrev || prevClose < loPrev) ? lo : loPrev;
+         up = (up < upPrev || prevClose > upPrev) ? up : upPrev;
+         if(k == 0 || atr[i - 1] == EMPTY_VALUE)
+            d = 1;
+         else
+            if(st[i - 1] == upper[i - 1])
+               d = c[i] > up ? -1 : 1;
+            else
+               d = c[i] < lo ? 1 : -1;
+         s1 = d == -1 ? lo : up;
+         upper[i] = up;
+         lower[i] = lo;
+        }
+      st[i] = s1;
+      dir[i] = d;
+
+      //--- ADX (ta.dmi)
+      int L = InpAdxLength, S = InpAdxSmoothing;
+      double tr1 = EMPTY_VALUE, p1 = EMPTY_VALUE, m1 = EMPTY_VALUE;
+      if(k == L - 1)
+        {
+         double s = 0.0;
+         for(int j = i - L + 1; j <= i; j++)
+            s += TrAt(j, h, l, c);
+         tr1 = s / L;
+        }
+      else
+         if(k >= L && trur[i - 1] != EMPTY_VALUE)
+            tr1 = (trur[i - 1] * (L - 1) + TrAt(i, h, l, c)) / L;
+      if(k == L)
+        {
+         double sp = 0.0, sm = 0.0;
+         for(int j = i - L + 1; j <= i; j++)
            {
-            RecResolve(InpTp1R, true);
-            g_resolved = true;
+            sp += PlusDmAt(j, h, l);
+            sm += MinusDmAt(j, h, l);
            }
-     }
-   //--- After TP1 the trade runs toward TP2/TP3; back to the original SL ends it.
-   if(g_tDir != 0 && g_tp1Reached)
-     {
-      bool slHit = g_tDir == 1 ? l[i] <= g_sl : h[i] >= g_sl;
-      if(slHit)
-        {
-         evSl = true;
-         evSlPrice = g_sl;
-         RecHistory(MaxTpText() + "→SL", MaxTpR(), true);
-         g_tDir = 0;
+         p1 = sp / L;
+         m1 = sm / L;
         }
-     }
-   if(g_tDir != 0)
-     {
-      bool isLong = g_tDir == 1;
-      if(!g_tp1Reached && (isLong ? h[i] >= g_tp1 : l[i] <= g_tp1))
-        {
-         g_tp1Reached = true;
-         evTp = "TP1";
-         evTpPrice = g_tp1;
-         if(InpShowTpMarks && drawObjects)
-            ObjText(g_prefix + "tp1_" + IntegerToString(i), time[i], g_tp1, "✓ TP1", InpTp1Color, 7, isLong ? ANCHOR_UPPER : ANCHOR_LOWER);
-        }
-      if(!g_tp2Reached && (isLong ? h[i] >= g_tp2 : l[i] <= g_tp2))
-        {
-         g_tp2Reached = true;
-         evTp = "TP2";
-         evTpPrice = g_tp2;
-         if(InpShowTpMarks && drawObjects)
-            ObjText(g_prefix + "tp2_" + IntegerToString(i), time[i], g_tp2, "✓ TP2", InpTp2Color, 7, isLong ? ANCHOR_UPPER : ANCHOR_LOWER);
-        }
-      if(!g_tp3Reached && (isLong ? h[i] >= g_tp3 : l[i] <= g_tp3))
-        {
-         g_tp3Reached = true;
-         evTp = "TP3";
-         evTpPrice = g_tp3;
-         if(isLong)
+      else
+         if(k > L && ps[i - 1] != EMPTY_VALUE)
            {
-            g_reLongArmed = true;
-            g_emaLongPull = false;
+            p1 = (ps[i - 1] * (L - 1) + PlusDmAt(i, h, l)) / L;
+            m1 = (ms[i - 1] * (L - 1) + MinusDmAt(i, h, l)) / L;
            }
+      trur[i] = tr1;
+      ps[i] = p1;
+      ms[i] = m1;
+      double x = EMPTY_VALUE;
+      if(tr1 != EMPTY_VALUE && p1 != EMPTY_VALUE)
+        {
+         if(tr1 == 0.0)
+            x = 0.0;
          else
            {
-            g_reShortArmed = true;
-            g_emaShortPull = false;
+            double pdi = 100.0 * p1 / tr1, mdi = 100.0 * m1 / tr1;
+            double sum = pdi + mdi;
+            x = MathAbs(pdi - mdi) / (sum != 0.0 ? sum : 1.0);
            }
-         RecHistory("TP3", InpTp3R, false);
-         if(InpShowTpMarks && drawObjects)
-            ObjText(g_prefix + "tp3_" + IntegerToString(i), time[i], g_tp3, "✓ TP3", InpTp3Color, 7, isLong ? ANCHOR_UPPER : ANCHOR_LOWER);
+        }
+      dx[i] = x;
+      double ar = EMPTY_VALUE;
+      if(k == L + S - 1)
+        {
+         double s = 0.0;
+         bool ok = true;
+         for(int j = i - S + 1; j <= i; j++)
+           {
+            if(dx[j] == EMPTY_VALUE)
+               ok = false;
+            else
+               s += dx[j];
+           }
+         if(ok)
+            ar = s / S;
+        }
+      else
+         if(k > L + S - 1 && adxRaw[i - 1] != EMPTY_VALUE)
+            ar = x == EMPTY_VALUE ? adxRaw[i - 1] : (adxRaw[i - 1] * (S - 1) + x) / S;
+      adxRaw[i] = ar;
+      adx[i] = ar == EMPTY_VALUE ? EMPTY_VALUE : 100.0 * ar;
+
+      //--- EMAs
+      ema200[i] = EmaAt(i, 200, c, ema200);
+      emaRe[i] = EmaAt(i, MathMax(1, InpReentryEmaLength), c, emaRe);
+     }
+
+   double            PlusDi(const int i)  { return (trur[i] != EMPTY_VALUE && trur[i] > 0.0 && ps[i] != EMPTY_VALUE) ? 100.0 * ps[i] / trur[i] : EMPTY_VALUE; }
+   double            MinusDi(const int i) { return (trur[i] != EMPTY_VALUE && trur[i] > 0.0 && ms[i] != EMPTY_VALUE) ? 100.0 * ms[i] / trur[i] : EMPTY_VALUE; }
+
+   void              RecResolve(const double r, const bool win)
+     {
+      if(recCount == 0)
+         return;
+      recs[recCount - 1].resolved = true;
+      recs[recCount - 1].win = win;
+      recs[recCount - 1].statR = r;
+     }
+
+   void              RecHistory(const string outcome, const double r, const bool slTouched)
+     {
+      if(histRecorded || recCount == 0)
+         return;
+      recs[recCount - 1].histDone = true;
+      recs[recCount - 1].outcome = outcome;
+      recs[recCount - 1].histR = r;
+      recs[recCount - 1].slHit = slTouched;
+      histRecorded = true;
+     }
+
+   void              NewTrade(const int side, const int i, const datetime t, const double c, const double a)
+     {
+      entry = c;
+      double risk = a * InpSlAtrMult;
+      sl = c - side * risk;
+      tp1 = c + side * risk * InpTp1R;
+      tp2 = c + side * risk * InpTp2R;
+      tp3 = c + side * risk * InpTp3R;
+      tDir = side;
+      tradeBar = i;
+      tp1Reached = false;
+      tp2Reached = false;
+      tp3Reached = false;
+      resolved = false;
+      histRecorded = false;
+      reLongArmed = false;
+      reShortArmed = false;
+      emaLongPull = false;
+      emaShortPull = false;
+      if(recCount >= ArraySize(recs))
+         ArrayResize(recs, recCount + 256);
+      recs[recCount].time = t;
+      recs[recCount].side = side;
+      recs[recCount].resolved = false;
+      recs[recCount].win = false;
+      recs[recCount].statR = 0.0;
+      recs[recCount].histDone = false;
+      recs[recCount].outcome = "";
+      recs[recCount].histR = 0.0;
+      recs[recCount].slHit = false;
+      recCount++;
+     }
+
+   string            MaxTpText() { return tp3Reached ? "TP3" : tp2Reached ? "TP2" : "TP1"; }
+   double            MaxTpR()    { return tp3Reached ? InpTp3R : tp2Reached ? InpTp2R : InpTp1R; }
+
+   //--- Pivot confirmed on bar i (pivot bar = i - L). Left side strictly lower/higher.
+   double            PivotHighAt(const int i, const double &h[])
+     {
+      int L = InpPivotLength, p = i - L;
+      if(p - L < first)
+         return EMPTY_VALUE;
+      for(int j = p - L; j <= p + L; j++)
+        {
+         if(j == p)
+            continue;
+         if(j < p ? h[j] >= h[p] : h[j] > h[p])
+            return EMPTY_VALUE;
+        }
+      return h[p];
+     }
+
+   double            PivotLowAt(const int i, const double &l[])
+     {
+      int L = InpPivotLength, p = i - L;
+      if(p - L < first)
+         return EMPTY_VALUE;
+      for(int j = p - L; j <= p + L; j++)
+        {
+         if(j == p)
+            continue;
+         if(j < p ? l[j] <= l[p] : l[j] < l[p])
+            return EMPTY_VALUE;
+        }
+      return l[p];
+     }
+
+   // Value of the line through two pivots at bar x (EMPTY if no line).
+   double            LineAt(const int b1, const double p1, const int b2, const double p2, const int x)
+     {
+      if(b1 < 0 || b2 < 0 || b1 == b2 || p1 == EMPTY_VALUE || p2 == EMPTY_VALUE)
+         return EMPTY_VALUE;
+      return p1 + (p2 - p1) / (b2 - b1) * (x - b1);
+     }
+
+   // Upper / lower breakout boundaries at bar x (same construction as the TradingView script).
+   void              BreakoutBounds(const int x, double &up, double &lo)
+     {
+      double supNow = LineAt(prevSupB, prevSupP, lastSupB, lastSupP, x);
+      double resNow = LineAt(prevResB, prevResP, lastResB, lastResP, x);
+      double supAtRes = lastResB >= 0 ? LineAt(prevSupB, prevSupP, lastSupB, lastSupP, lastResB) : EMPTY_VALUE;
+      double resAtSup = lastSupB >= 0 ? LineAt(prevResB, prevResP, lastResB, lastResP, lastSupB) : EMPTY_VALUE;
+      double upWidth = (supAtRes != EMPTY_VALUE && lastResP != EMPTY_VALUE) ? lastResP - supAtRes : EMPTY_VALUE;
+      double downWidth = (resAtSup != EMPTY_VALUE && lastSupP != EMPTY_VALUE) ? resAtSup - lastSupP : EMPTY_VALUE;
+      bool upValid = upWidth != EMPTY_VALUE && upWidth > 0.0 && supNow != EMPTY_VALUE;
+      bool downValid = downWidth != EMPTY_VALUE && downWidth > 0.0 && resNow != EMPTY_VALUE;
+      up = upValid ? supNow + upWidth : resNow;
+      lo = downValid ? resNow - downWidth : supNow;
+     }
+
+   void              AddKeyLevel(double &prices[], int &bars[], const double price, const int bar, const double tol)
+     {
+      int n = ArraySize(prices);
+      int match = -1;
+      double best = 0.0;
+      for(int j = 0; j < n; j++)
+        {
+         double dist = MathAbs(prices[j] - price);
+         if(dist <= tol && (match < 0 || dist < best))
+           {
+            match = j;
+            best = dist;
+           }
+        }
+      if(match >= 0)
+        {
+         prices[match] = (prices[match] + price) / 2.0;
+         return;
+        }
+      ArrayResize(prices, n + 1);
+      ArrayResize(bars, n + 1);
+      for(int j = n; j > 0; j--)
+        {
+         prices[j] = prices[j - 1];
+         bars[j] = bars[j - 1];
+        }
+      prices[0] = price;
+      bars[0] = bar;
+      if(ArraySize(prices) > InpKeyLevelsCount)
+        {
+         ArrayResize(prices, InpKeyLevelsCount);
+         ArrayResize(bars, InpKeyLevelsCount);
         }
      }
-   if(evSl && InpShowTpMarks && drawObjects)
-      ObjText(g_prefix + "sl_" + IntegerToString(i), time[i], evSlPrice, "✗ SL", InpSlColor, 7, ANCHOR_CENTER);
 
-   //--- A new signal while the previous trade is still open: close it at this candle's close.
-   double risk = (g_entry != EMPTY_VALUE && g_sl != EMPTY_VALUE) ? MathAbs(g_entry - g_sl) : 0.0;
-   double reversalR = (g_tDir != 0 && risk > 0.0) ? (c[i] - g_entry) * g_tDir / risk : 0.0;
-   if((buy || sell) && g_tDir != 0 && !g_resolved)
+   //--- Signals and the virtual trade on closed bar i.
+   void              Closed(const int i, const datetime &t[], const double &h[], const double &l[], const double &c[], BarEvents &ev)
      {
-      RecResolve(reversalR, reversalR > 0.0);
-      g_resolved = true;
+      ClearEvents(ev);
+      lastClosed = i;
+      int L = InpPivotLength;
+      double pivHigh = PivotHighAt(i, h);
+      double pivLow = PivotLowAt(i, l);
+      if(pivLow != EMPTY_VALUE)
+        {
+         prevSupP = lastSupP;
+         prevSupB = lastSupB;
+         lastSupP = pivLow;
+         lastSupB = i - L;
+        }
+      if(pivHigh != EMPTY_VALUE)
+        {
+         prevResP = lastResP;
+         prevResB = lastResB;
+         lastResP = pivHigh;
+         lastResB = i - L;
+        }
+
+      int d0 = (int)dir[i];
+      int d1 = (int)dir[i - 1];
+      bool up = d0 < 0, dn = d0 > 0;
+      double s0 = st[i];
+      double ema = emaRe[i], emaPrev = emaRe[i - 1];
+      bool emaOk = ema != EMPTY_VALUE && emaPrev != EMPTY_VALUE;
+      bool emaCrossUp = emaOk && c[i] > ema && c[i - 1] <= emaPrev;
+      bool emaCrossDown = emaOk && c[i] < ema && c[i - 1] >= emaPrev;
+
+      bool stBuy = d0 < 0 && d1 > 0;
+      bool stSell = d0 > 0 && d1 < 0;
+      bool reBuy = InpReentrySt && reLongArmed && up && s0 != EMPTY_VALUE && l[i] <= s0 && c[i] > s0;
+      bool reSell = InpReentrySt && reShortArmed && dn && s0 != EMPTY_VALUE && h[i] >= s0 && c[i] < s0;
+      bool emaReBuy = InpReentryEma && reLongArmed && up && emaLongPull && emaCrossUp;
+      bool emaReSell = InpReentryEma && reShortArmed && dn && emaShortPull && emaCrossDown;
+      bool fastBuy = InpReentryEmaFast && reLongArmed && up && ema != EMPTY_VALUE && l[i] <= ema && c[i] > ema;
+      bool fastSell = InpReentryEmaFast && reShortArmed && dn && ema != EMPTY_VALUE && h[i] >= ema && c[i] < ema;
+      bool boBuy = false, boSell = false;
+      if(InpBreakoutSignals)
+        {
+         double upNow = EMPTY_VALUE, loNow = EMPTY_VALUE, upPrev = EMPTY_VALUE, loPrev = EMPTY_VALUE;
+         BreakoutBounds(i, upNow, loNow);
+         BreakoutBounds(i - 1, upPrev, loPrev);
+         boBuy = upNow != EMPTY_VALUE && upPrev != EMPTY_VALUE && c[i] > upNow && c[i - 1] <= upPrev;
+         boSell = loNow != EMPTY_VALUE && loPrev != EMPTY_VALUE && c[i] < loNow && c[i - 1] >= loPrev;
+        }
+
+      bool adxOk = !InpUseAdxFilter || (adx[i] != EMPTY_VALUE && adx[i] > InpAdxSignalMin);
+      bool emaLongOk = !InpUseEma200Filter || (ema200[i] != EMPTY_VALUE && c[i] > ema200[i]);
+      bool emaShortOk = !InpUseEma200Filter || (ema200[i] != EMPTY_VALUE && c[i] < ema200[i]);
+      bool htfLongOk = true, htfShortOk = true;
+      if(htfOn)
+        {
+         int hd = HtfDirAt(t[i]);
+         htfLongOk = hd < 0;
+         htfShortOk = hd > 0;
+        }
+      bool buy = (stBuy || boBuy || reBuy || emaReBuy || fastBuy) && adxOk && emaLongOk && htfLongOk;
+      bool sell = (stSell || boSell || reSell || emaReSell || fastSell) && adxOk && emaShortOk && htfShortOk;
+      if(InpReentryEma && reLongArmed && up && emaCrossDown)
+         emaLongPull = true;
+      if(InpReentryEma && reShortArmed && dn && emaCrossUp)
+         emaShortPull = true;
+
+      //--- Open virtual trade: SL first, then TP1 (whole trade closed at TP1 / SL / reversal for the statistics)
+      if(tDir != 0 && !resolved)
+        {
+         bool slTouch = tDir == 1 ? l[i] <= sl : h[i] >= sl;
+         bool tp1Touch = tDir == 1 ? h[i] >= tp1 : l[i] <= tp1;
+         if(slTouch)
+           {
+            ev.slHit = true;
+            ev.slPrice = sl;
+            RecResolve(-1.0, false);
+            RecHistory("SL", -1.0, true);
+            resolved = true;
+            tDir = 0;
+           }
+         else
+            if(tp1Touch)
+              {
+               RecResolve(InpTp1R, true);
+               resolved = true;
+              }
+        }
+      //--- After TP1 the trade runs toward TP2/TP3; back to the original SL ends it.
+      if(tDir != 0 && tp1Reached)
+        {
+         bool slTouch = tDir == 1 ? l[i] <= sl : h[i] >= sl;
+         if(slTouch)
+           {
+            ev.slHit = true;
+            ev.slPrice = sl;
+            RecHistory(MaxTpText() + "→SL", MaxTpR(), true);
+            tDir = 0;
+           }
+        }
+      if(tDir != 0)
+        {
+         bool isLong = tDir == 1;
+         if(!tp1Reached && (isLong ? h[i] >= tp1 : l[i] <= tp1))
+           {
+            tp1Reached = true;
+            ev.tpHit[0] = true;
+            ev.tpPrice[0] = tp1;
+           }
+         if(!tp2Reached && (isLong ? h[i] >= tp2 : l[i] <= tp2))
+           {
+            tp2Reached = true;
+            ev.tpHit[1] = true;
+            ev.tpPrice[1] = tp2;
+           }
+         if(!tp3Reached && (isLong ? h[i] >= tp3 : l[i] <= tp3))
+           {
+            tp3Reached = true;
+            ev.tpHit[2] = true;
+            ev.tpPrice[2] = tp3;
+            if(isLong)
+              {
+               reLongArmed = true;
+               emaLongPull = false;
+              }
+            else
+              {
+               reShortArmed = true;
+               emaShortPull = false;
+              }
+            RecHistory("TP3", InpTp3R, false);
+           }
+        }
+
+      //--- A new signal while the previous trade is still open: close it at this candle's close.
+      double risk = (entry != EMPTY_VALUE && sl != EMPTY_VALUE) ? MathAbs(entry - sl) : 0.0;
+      double reversalR = (tDir != 0 && risk > 0.0) ? (c[i] - entry) * tDir / risk : 0.0;
+      if((buy || sell) && tDir != 0 && !resolved)
+        {
+         RecResolve(reversalR, reversalR > 0.0);
+         resolved = true;
+        }
+      if((buy || sell) && tDir != 0 && !histRecorded)
+        {
+         string outcome = tp3Reached ? "TP3" : tp2Reached ? "TP2" : tp1Reached ? "TP1" : "REV";
+         double r = tp3Reached ? InpTp3R : tp2Reached ? InpTp2R : tp1Reached ? InpTp1R : reversalR;
+         RecHistory(outcome, r, false);
+        }
+
+      if(buy && atr[i] != EMPTY_VALUE)
+         NewTrade(1, i, t[i], c[i], atr[i]);
+      if(sell && atr[i] != EMPTY_VALUE)
+         NewTrade(-1, i, t[i], c[i], atr[i]);
+      ev.buy = buy && atr[i] != EMPTY_VALUE;
+      ev.sell = sell && atr[i] != EMPTY_VALUE;
+
+      if(InpShowKeyLevels && atr[i] != EMPTY_VALUE)
+        {
+         double tol = atr[i] * InpKeyLevelTolAtr;
+         if(pivLow != EMPTY_VALUE)
+            AddKeyLevel(kSupPrice, kSupBar, pivLow, i - L, tol);
+         if(pivHigh != EMPTY_VALUE)
+            AddKeyLevel(kResPrice, kResBar, pivHigh, i - L, tol);
+        }
      }
-   if((buy || sell) && g_tDir != 0 && !g_histRecorded)
+
+   // Statistics of the signals that started at or after `cutoff`.
+   void              Stats(const datetime cutoff, int &signals, int &wins, int &losses, double &sumR)
      {
-      string outcome = g_tp3Reached ? "TP3" : g_tp2Reached ? "TP2" : g_tp1Reached ? "TP1" : "REV";
-      double r = g_tp3Reached ? InpTp3R : g_tp2Reached ? InpTp2R : g_tp1Reached ? InpTp1R : reversalR;
-      RecHistory(outcome, r, false);
+      signals = 0;
+      wins = 0;
+      losses = 0;
+      sumR = 0.0;
+      for(int k = 0; k < recCount; k++)
+        {
+         if(recs[k].time < cutoff)
+            continue;
+         signals++;
+         if(!recs[k].resolved)
+            continue;
+         sumR += recs[k].statR;
+         if(recs[k].win)
+            wins++;
+         else
+            losses++;
+        }
      }
+  };
 
-   //--- New trade levels
-   if(buy && B_atr[i] != EMPTY_VALUE)
-      NewTrade(1, i, time[i], c[i], B_atr[i]);
-   if(sell && B_atr[i] != EMPTY_VALUE)
-      NewTrade(-1, i, time[i], c[i], B_atr[i]);
+//--- State
+CEngine  g_eng;
+string   g_prefix = "";
+bool     g_haveData = false;
+double   g_dashAdx = EMPTY_VALUE, g_dashPlusDi = EMPTY_VALUE, g_dashMinusDi = EMPTY_VALUE;
+int      g_dashDir = 0;
+datetime g_dashNow = 0;
+// Win rate per timeframe table
+ENUM_TIMEFRAMES g_tfList[5] = {PERIOD_M5, PERIOD_M15, PERIOD_M30, PERIOD_H1, PERIOD_H4};
+datetime g_tfLast[5];
+bool     g_tfOk[5];
+int      g_tfSignals[5], g_tfWins[5], g_tfLosses[5];
+double   g_tfSumR[5];
+datetime g_tfComputed = 0;
+string   g_geoState = "";
 
-   //--- Outputs for the EA and the arrows
-   B_sig[i] = sell ? -1.0 : buy ? 1.0 : 0.0;
-   if(g_entry != EMPTY_VALUE)
+//+------------------------------------------------------------------+
+//| Chart objects                                                    |
+//+------------------------------------------------------------------+
+bool ObjEnsure(const string name, const ENUM_OBJECT type, const datetime t1, const double p1, const datetime t2 = 0, const double p2 = 0.0)
+  {
+   if(ObjectFind(0, name) >= 0)
+      return true;
+   bool ok = (type == OBJ_TREND || type == OBJ_RECTANGLE) ? ObjectCreate(0, name, type, 0, t1, p1, t2, p2)
+                                                          : ObjectCreate(0, name, type, 0, t1, p1);
+   if(!ok)
+      LogOnce(LOG_ERRORS, "obj" + IntegerToString(GetLastError()) + EnumToString(type),
+              StringFormat("วาดวัตถุ %s (%s) ไม่สำเร็จ error %d", name, EnumToString(type), GetLastError()));
+   return ok;
+  }
+
+void ObjText(const string name, const datetime t, const double price, const string text, const color clr,
+             const int size, const ENUM_ANCHOR_POINT anchor, const string tip = "")
+  {
+   if(!ObjEnsure(name, OBJ_TEXT, t, price))
+      return;
+   ObjectSetInteger(0, name, OBJPROP_TIME, 0, t);
+   ObjectSetDouble(0, name, OBJPROP_PRICE, 0, price);
+   ObjectSetString(0, name, OBJPROP_TEXT, text);
+   ObjectSetString(0, name, OBJPROP_FONT, "Tahoma");
+   ObjectSetInteger(0, name, OBJPROP_FONTSIZE, size);
+   ObjectSetInteger(0, name, OBJPROP_COLOR, clr);
+   ObjectSetInteger(0, name, OBJPROP_ANCHOR, anchor);
+   ObjectSetInteger(0, name, OBJPROP_SELECTABLE, false);
+   ObjectSetInteger(0, name, OBJPROP_HIDDEN, true);
+   ObjectSetString(0, name, OBJPROP_TOOLTIP, tip == "" ? text : tip);
+  }
+
+void ObjLine(const string name, const datetime t1, const double p1, const datetime t2, const double p2,
+             const color clr, const ENUM_LINE_STYLE style, const int width, const bool rayRight)
+  {
+   if(!ObjEnsure(name, OBJ_TREND, t1, p1, t2, p2))
+      return;
+   ObjectSetInteger(0, name, OBJPROP_TIME, 0, t1);
+   ObjectSetDouble(0, name, OBJPROP_PRICE, 0, p1);
+   ObjectSetInteger(0, name, OBJPROP_TIME, 1, t2);
+   ObjectSetDouble(0, name, OBJPROP_PRICE, 1, p2);
+   ObjectSetInteger(0, name, OBJPROP_COLOR, clr);
+   ObjectSetInteger(0, name, OBJPROP_STYLE, style);
+   ObjectSetInteger(0, name, OBJPROP_WIDTH, width);
+   ObjectSetInteger(0, name, OBJPROP_RAY_RIGHT, rayRight);
+   ObjectSetInteger(0, name, OBJPROP_RAY_LEFT, false);
+   ObjectSetInteger(0, name, OBJPROP_SELECTABLE, false);
+   ObjectSetInteger(0, name, OBJPROP_HIDDEN, true);
+   ObjectSetInteger(0, name, OBJPROP_BACK, false);
+  }
+
+void ObjBox(const string name, const datetime t1, const double p1, const datetime t2, const double p2, const color clr)
+  {
+   if(!ObjEnsure(name, OBJ_RECTANGLE, t1, p1, t2, p2))
+      return;
+   ObjectSetInteger(0, name, OBJPROP_TIME, 0, t1);
+   ObjectSetDouble(0, name, OBJPROP_PRICE, 0, p1);
+   ObjectSetInteger(0, name, OBJPROP_TIME, 1, t2);
+   ObjectSetDouble(0, name, OBJPROP_PRICE, 1, p2);
+   ObjectSetInteger(0, name, OBJPROP_COLOR, clr);
+   ObjectSetInteger(0, name, OBJPROP_FILL, true);
+   ObjectSetInteger(0, name, OBJPROP_BACK, true);
+   ObjectSetInteger(0, name, OBJPROP_SELECTABLE, false);
+   ObjectSetInteger(0, name, OBJPROP_HIDDEN, true);
+  }
+
+void ObjDelete(const string name)
+  {
+   if(ObjectFind(0, name) >= 0)
+      ObjectDelete(0, name);
+  }
+
+//+------------------------------------------------------------------+
+//| Drawing of one closed bar, the latest trade and the patterns     |
+//+------------------------------------------------------------------+
+void DrawBarEvents(const int i, const datetime &time[], const double &h[], const double &l[], const double &c[], const BarEvents &ev)
+  {
+   string id = IntegerToString((long)time[i]);
+   bool isLong = g_eng.tDir >= 0;
+   if(InpShowTpMarks)
      {
-      B_entry[i] = g_entry;
-      B_sl[i] = g_sl;
-      B_tp1[i] = g_tp1;
-      B_tp2[i] = g_tp2;
-      B_tp3[i] = g_tp3;
+      color tpClr[3];
+      tpClr[0] = InpTp1Color;
+      tpClr[1] = InpTp2Color;
+      tpClr[2] = InpTp3Color;
+      for(int k = 0; k < 3; k++)
+         if(ev.tpHit[k])
+            ObjText(g_prefix + "tp" + IntegerToString(k + 1) + "_" + id, time[i], ev.tpPrice[k], "✓ TP" + IntegerToString(k + 1), tpClr[k], 7,
+                    isLong ? ANCHOR_UPPER : ANCHOR_LOWER);
+      if(ev.slHit)
+         ObjText(g_prefix + "sl_" + id, time[i], ev.slPrice, "✗ SL", InpSlColor, 7, ANCHOR_CENTER);
      }
    if(InpShowSignals)
      {
-      B_buy[i] = buy ? l[i] : EMPTY_VALUE;
-      B_sell[i] = sell ? h[i] : EMPTY_VALUE;
-      if(drawObjects && buy)
-         ObjText(g_prefix + "buy_" + IntegerToString(i), time[i], l[i], "BUY", InpUpColor, 7, ANCHOR_UPPER,
+      if(ev.buy)
+         ObjText(g_prefix + "buy_" + id, time[i], l[i], "BUY", InpUpColor, 7, ANCHOR_UPPER,
                  "BUY " + Fmt(c[i]) + " · " + TimeToString(time[i], TIME_DATE | TIME_MINUTES));
-      if(drawObjects && sell)
-         ObjText(g_prefix + "sell_" + IntegerToString(i), time[i], h[i], "SELL", InpDownColor, 7, ANCHOR_LOWER,
+      if(ev.sell)
+         ObjText(g_prefix + "sell_" + id, time[i], h[i], "SELL", InpDownColor, 7, ANCHOR_LOWER,
                  "SELL " + Fmt(c[i]) + " · " + TimeToString(time[i], TIME_DATE | TIME_MINUTES));
-     }
-
-   //--- Key levels (horizontal support / resistance)
-   if(InpShowKeyLevels && B_atr[i] != EMPTY_VALUE)
-     {
-      double tol = B_atr[i] * InpKeyLevelTolAtr;
-      if(pivLow != EMPTY_VALUE)
-         AddKeyLevel(g_kSupPrice, g_kSupBar, pivLow, i - L, tol);
-      if(pivHigh != EMPTY_VALUE)
-         AddKeyLevel(g_kResPrice, g_kResBar, pivHigh, i - L, tol);
-     }
-
-   //--- Alerts (live candles only, not while loading history)
-   if(live && i == ratesTotal - 2)
-     {
-      string head = _Symbol + " [" + TfName(PERIOD_CURRENT) + "]";
-      if(InpAlertOnTpSl && evTp != "")
-         Notify("✅ ถึง " + evTp + " " + head + "\nราคา: " + Fmt(evTpPrice));
-      if(InpAlertOnTpSl && evSl)
-         Notify("⛔ โดน SL " + head + "\nSL: " + Fmt(evSlPrice));
-      if(InpAlertOnSignal && (buy || sell))
-         Notify((sell ? "🔴 SELL (ขาย) " : "🟢 BUY (ซื้อ) ") + head
-                + "\nเข้า: " + Fmt(g_entry)
-                + "\nSL: " + Fmt(g_sl) + " (ระยะ " + Fmt(MathAbs(g_entry - g_sl)) + ")"
-                + "\nTP1: " + Fmt(g_tp1) + "\nTP2: " + Fmt(g_tp2) + "\nTP3: " + Fmt(g_tp3));
      }
   }
 
-//+------------------------------------------------------------------+
-//| Drawing of the latest trade, trend lines and key levels          |
-//+------------------------------------------------------------------+
 void DrawTradeObjects(const int ratesTotal, const datetime &time[])
   {
    string names[] = {"lvE", "lvT1", "lvT2", "lvT3", "lvS", "pxE", "pxT1", "pxT2", "pxT3", "pxS", "bxT1", "bxT2", "bxT3", "bxS"};
-   if(g_entry == EMPTY_VALUE || g_tradeBar < 0)
+   if(g_eng.entry == EMPTY_VALUE || g_eng.tradeBar < 0)
      {
       for(int k = 0; k < ArraySize(names); k++)
          ObjDelete(g_prefix + names[k]);
       return;
      }
    int sec = PeriodSeconds();
-   datetime t1 = time[g_tradeBar];
+   datetime t1 = time[g_eng.tradeBar];
    datetime tEnd = (datetime)((long)time[ratesTotal - 1] + (long)sec * InpPriceLabelOffset);
    double lv[5];
-   lv[0] = g_entry;
-   lv[1] = g_tp1;
-   lv[2] = g_tp2;
-   lv[3] = g_tp3;
-   lv[4] = g_sl;
+   lv[0] = g_eng.entry;
+   lv[1] = g_eng.tp1;
+   lv[2] = g_eng.tp2;
+   lv[3] = g_eng.tp3;
+   lv[4] = g_eng.sl;
    color cl[5];
    cl[0] = InpEntryColor;
    cl[1] = InpTp1Color;
@@ -1086,10 +1214,10 @@ void DrawTradeObjects(const int ratesTotal, const datetime &time[])
    color bg = ChartBg();
    if(InpShowBoxes)
      {
-      ObjBox(g_prefix + "bxT1", t1, g_entry, tEnd, g_tp1, Blend(InpTp1Color, bg, 0.18));
-      ObjBox(g_prefix + "bxT2", t1, g_tp1, tEnd, g_tp2, Blend(InpTp2Color, bg, 0.13));
-      ObjBox(g_prefix + "bxT3", t1, g_tp2, tEnd, g_tp3, Blend(InpTp3Color, bg, 0.10));
-      ObjBox(g_prefix + "bxS", t1, g_entry, tEnd, g_sl, Blend(InpSlColor, bg, 0.15));
+      ObjBox(g_prefix + "bxT1", t1, g_eng.entry, tEnd, g_eng.tp1, Blend(InpTp1Color, bg, 0.18));
+      ObjBox(g_prefix + "bxT2", t1, g_eng.tp1, tEnd, g_eng.tp2, Blend(InpTp2Color, bg, 0.13));
+      ObjBox(g_prefix + "bxT3", t1, g_eng.tp2, tEnd, g_eng.tp3, Blend(InpTp3Color, bg, 0.10));
+      ObjBox(g_prefix + "bxS", t1, g_eng.entry, tEnd, g_eng.sl, Blend(InpSlColor, bg, 0.15));
      }
    else
       for(int k = 10; k < 14; k++)
@@ -1099,32 +1227,32 @@ void DrawTradeObjects(const int ratesTotal, const datetime &time[])
 void DrawPatternObjects(const int ratesTotal, const datetime &time[])
   {
    int sec = PeriodSeconds();
-   int dir = (int)B_dir[ratesTotal - 1];
+   int d0 = (int)g_eng.dir[ratesTotal - 1];
    //--- Key levels
    for(int j = 0; j < 5; j++)
      {
       string ns = g_prefix + "kS" + IntegerToString(j);
       string nr = g_prefix + "kR" + IntegerToString(j);
-      if(InpShowKeyLevels && j < ArraySize(g_kSupPrice) && g_kSupBar[j] >= 0)
-         ObjLine(ns, time[g_kSupBar[j]], g_kSupPrice[j], (datetime)((long)time[g_kSupBar[j]] + sec), g_kSupPrice[j], InpSupportColor, STYLE_DOT, 1, true);
+      if(InpShowKeyLevels && j < ArraySize(g_eng.kSupPrice) && g_eng.kSupBar[j] >= 0)
+         ObjLine(ns, time[g_eng.kSupBar[j]], g_eng.kSupPrice[j], (datetime)((long)time[g_eng.kSupBar[j]] + sec), g_eng.kSupPrice[j], InpSupportColor, STYLE_DOT, 1, true);
       else
          ObjDelete(ns);
-      if(InpShowKeyLevels && j < ArraySize(g_kResPrice) && g_kResBar[j] >= 0)
-         ObjLine(nr, time[g_kResBar[j]], g_kResPrice[j], (datetime)((long)time[g_kResBar[j]] + sec), g_kResPrice[j], InpResistanceColor, STYLE_DOT, 1, true);
+      if(InpShowKeyLevels && j < ArraySize(g_eng.kResPrice) && g_eng.kResBar[j] >= 0)
+         ObjLine(nr, time[g_eng.kResBar[j]], g_eng.kResPrice[j], (datetime)((long)time[g_eng.kResBar[j]] + sec), g_eng.kResPrice[j], InpResistanceColor, STYLE_DOT, 1, true);
       else
          ObjDelete(nr);
      }
    //--- Diagonal trend lines through the last two pivots
-   bool risingSupport = g_prevSupB >= 0 && g_lastSupB >= 0 && g_lastSupP > g_prevSupP;
-   bool fallingResistance = g_prevResB >= 0 && g_lastResB >= 0 && g_lastResP < g_prevResP;
-   bool allowSup = InpShowTrendlines && g_prevSupB >= 0 && g_lastSupB >= 0 && (!InpOnlyCurrentSlope || (dir < 0 && risingSupport));
-   bool allowRes = InpShowTrendlines && g_prevResB >= 0 && g_lastResB >= 0 && (!InpOnlyCurrentSlope || (dir > 0 && fallingResistance));
+   bool risingSupport = g_eng.prevSupB >= 0 && g_eng.lastSupB >= 0 && g_eng.lastSupP > g_eng.prevSupP;
+   bool fallingResistance = g_eng.prevResB >= 0 && g_eng.lastResB >= 0 && g_eng.lastResP < g_eng.prevResP;
+   bool allowSup = InpShowTrendlines && g_eng.prevSupB >= 0 && g_eng.lastSupB >= 0 && (!InpOnlyCurrentSlope || (d0 < 0 && risingSupport));
+   bool allowRes = InpShowTrendlines && g_eng.prevResB >= 0 && g_eng.lastResB >= 0 && (!InpOnlyCurrentSlope || (d0 > 0 && fallingResistance));
    if(allowSup)
-      ObjLine(g_prefix + "tlS", time[g_prevSupB], g_prevSupP, time[g_lastSupB], g_lastSupP, InpSupportColor, STYLE_SOLID, 2, true);
+      ObjLine(g_prefix + "tlS", time[g_eng.prevSupB], g_eng.prevSupP, time[g_eng.lastSupB], g_eng.lastSupP, InpSupportColor, STYLE_SOLID, 2, true);
    else
       ObjDelete(g_prefix + "tlS");
    if(allowRes)
-      ObjLine(g_prefix + "tlR", time[g_prevResB], g_prevResP, time[g_lastResB], g_lastResP, InpResistanceColor, STYLE_SOLID, 2, true);
+      ObjLine(g_prefix + "tlR", time[g_eng.prevResB], g_eng.prevResP, time[g_eng.lastResB], g_eng.lastResP, InpResistanceColor, STYLE_SOLID, 2, true);
    else
       ObjDelete(g_prefix + "tlR");
    //--- Parallel channel
@@ -1132,47 +1260,52 @@ void DrawPatternObjects(const int ratesTotal, const datetime &time[])
    bool drawn = false;
    if(InpShowChannel)
      {
-      double supAtRes = g_lastResB >= 0 ? LineAt(g_prevSupB, g_prevSupP, g_lastSupB, g_lastSupP, g_lastResB) : EMPTY_VALUE;
-      double resAtSup = g_lastSupB >= 0 ? LineAt(g_prevResB, g_prevResP, g_lastResB, g_lastResP, g_lastSupB) : EMPTY_VALUE;
-      bool supValid = supAtRes != EMPTY_VALUE && g_lastResP != EMPTY_VALUE && g_lastResP > supAtRes
-                      && (!InpOnlyCurrentSlope || (dir < 0 && g_lastSupP > g_prevSupP));
-      bool resValid = resAtSup != EMPTY_VALUE && g_lastSupP != EMPTY_VALUE && g_lastSupP < resAtSup
-                      && (!InpOnlyCurrentSlope || (dir > 0 && g_lastResP < g_prevResP));
+      double supAtRes = g_eng.lastResB >= 0 ? g_eng.LineAt(g_eng.prevSupB, g_eng.prevSupP, g_eng.lastSupB, g_eng.lastSupP, g_eng.lastResB) : EMPTY_VALUE;
+      double resAtSup = g_eng.lastSupB >= 0 ? g_eng.LineAt(g_eng.prevResB, g_eng.prevResP, g_eng.lastResB, g_eng.lastResP, g_eng.lastSupB) : EMPTY_VALUE;
+      bool supValid = supAtRes != EMPTY_VALUE && g_eng.lastResP != EMPTY_VALUE && g_eng.lastResP > supAtRes
+                      && (!InpOnlyCurrentSlope || (d0 < 0 && g_eng.lastSupP > g_eng.prevSupP));
+      bool resValid = resAtSup != EMPTY_VALUE && g_eng.lastSupP != EMPTY_VALUE && g_eng.lastSupP < resAtSup
+                      && (!InpOnlyCurrentSlope || (d0 > 0 && g_eng.lastResP < g_eng.prevResP));
       if(supValid || resValid)
         {
          int b1, b2;
          double p1, p2, width;
          if(supValid)
            {
-            b1 = g_prevSupB;
-            b2 = g_lastSupB;
-            p1 = g_prevSupP;
-            p2 = g_lastSupP;
-            width = g_lastResP - supAtRes;
+            b1 = g_eng.prevSupB;
+            b2 = g_eng.lastSupB;
+            p1 = g_eng.prevSupP;
+            p2 = g_eng.lastSupP;
+            width = g_eng.lastResP - supAtRes;
            }
          else
            {
-            b1 = g_prevResB;
-            b2 = g_lastResB;
-            p1 = g_prevResP;
-            p2 = g_lastResP;
-            width = -(resAtSup - g_lastSupP);
+            b1 = g_eng.prevResB;
+            b2 = g_eng.lastResB;
+            p1 = g_eng.prevResP;
+            p2 = g_eng.lastResP;
+            width = -(resAtSup - g_eng.lastSupP);
            }
-         if(ObjectFind(0, chName) < 0)
-            ObjectCreate(0, chName, OBJ_CHANNEL, 0, time[b1], p1, time[b2], p2, time[b1], p1 + width);
-         ObjectSetInteger(0, chName, OBJPROP_TIME, 0, time[b1]);
-         ObjectSetDouble(0, chName, OBJPROP_PRICE, 0, p1);
-         ObjectSetInteger(0, chName, OBJPROP_TIME, 1, time[b2]);
-         ObjectSetDouble(0, chName, OBJPROP_PRICE, 1, p2);
-         ObjectSetInteger(0, chName, OBJPROP_TIME, 2, time[b1]);
-         ObjectSetDouble(0, chName, OBJPROP_PRICE, 2, p1 + width);
-         ObjectSetInteger(0, chName, OBJPROP_COLOR, InpChannelColor);
-         ObjectSetInteger(0, chName, OBJPROP_FILL, true);
-         ObjectSetInteger(0, chName, OBJPROP_BACK, true);
-         ObjectSetInteger(0, chName, OBJPROP_RAY_RIGHT, true);
-         ObjectSetInteger(0, chName, OBJPROP_SELECTABLE, false);
-         ObjectSetInteger(0, chName, OBJPROP_HIDDEN, true);
-         drawn = true;
+         bool ok = ObjectFind(0, chName) >= 0 || ObjectCreate(0, chName, OBJ_CHANNEL, 0, time[b1], p1, time[b2], p2, time[b1], p1 + width);
+         if(!ok)
+            LogOnce(LOG_ERRORS, "chan" + IntegerToString(GetLastError()), StringFormat("วาดกรอบราคาไม่สำเร็จ error %d", GetLastError()));
+         else
+           {
+            ObjectSetInteger(0, chName, OBJPROP_TIME, 0, time[b1]);
+            ObjectSetDouble(0, chName, OBJPROP_PRICE, 0, p1);
+            ObjectSetInteger(0, chName, OBJPROP_TIME, 1, time[b2]);
+            ObjectSetDouble(0, chName, OBJPROP_PRICE, 1, p2);
+            ObjectSetInteger(0, chName, OBJPROP_TIME, 2, time[b1]);
+            ObjectSetDouble(0, chName, OBJPROP_PRICE, 2, p1 + width);
+            ObjectSetInteger(0, chName, OBJPROP_COLOR, InpChannelColor);
+            ObjectSetInteger(0, chName, OBJPROP_FILL, true);
+            ObjectSetInteger(0, chName, OBJPROP_BACK, true);
+            ObjectSetInteger(0, chName, OBJPROP_RAY_RIGHT, true);
+            ObjectSetInteger(0, chName, OBJPROP_SELECTABLE, false);
+            ObjectSetInteger(0, chName, OBJPROP_HIDDEN, true);
+            drawn = true;
+            Log(LOG_DETAIL, StringFormat("กรอบราคา: %s %s → %s %s กว้าง %s", TimeToString(time[b1]), Fmt(p1), TimeToString(time[b2]), Fmt(p2), Fmt(width)));
+           }
         }
      }
    if(!drawn)
@@ -1187,6 +1320,8 @@ color  g_tClr[];
 string g_tTip[];
 int    g_tCols = 1;
 int    g_stack[4];
+int    g_cornerW[4];
+string g_geoNow = "";
 
 void TBegin(const int cols)
   {
@@ -1236,33 +1371,44 @@ void TEnd(const string id, const ENUM_BASE_CORNER corner)
    int x0 = 10;
    int y0 = (isLower ? 10 : 20) + g_stack[(int)corner];
    g_stack[(int)corner] += H + 6;
+   if(W + x0 > g_cornerW[(int)corner])
+      g_cornerW[(int)corner] = W + x0;
+   g_geoNow += StringFormat("%s:%s %dx%d y%d; ", id, EnumToString(corner), W, H, y0);
 
    color bg = Blend(ChartBg(), ChartFg(), 0.88);
    string bgName = pfx + "bg";
-   ObjectCreate(0, bgName, OBJ_RECTANGLE_LABEL, 0, 0, 0);
-   ObjectSetInteger(0, bgName, OBJPROP_CORNER, corner);
-   ObjectSetInteger(0, bgName, OBJPROP_XDISTANCE, isRight ? x0 + W : x0);
-   ObjectSetInteger(0, bgName, OBJPROP_YDISTANCE, isLower ? y0 + H : y0);
-   ObjectSetInteger(0, bgName, OBJPROP_XSIZE, W);
-   ObjectSetInteger(0, bgName, OBJPROP_YSIZE, H);
-   ObjectSetInteger(0, bgName, OBJPROP_BGCOLOR, bg);
-   ObjectSetInteger(0, bgName, OBJPROP_BORDER_TYPE, BORDER_FLAT);
-   ObjectSetInteger(0, bgName, OBJPROP_COLOR, bg);
-   ObjectSetInteger(0, bgName, OBJPROP_SELECTABLE, false);
-   ObjectSetInteger(0, bgName, OBJPROP_HIDDEN, true);
-   ObjectSetInteger(0, bgName, OBJPROP_BACK, false);
+   if(ObjectCreate(0, bgName, OBJ_RECTANGLE_LABEL, 0, 0, 0))
+     {
+      ObjectSetInteger(0, bgName, OBJPROP_CORNER, corner);
+      ObjectSetInteger(0, bgName, OBJPROP_XDISTANCE, isRight ? x0 + W : x0);
+      ObjectSetInteger(0, bgName, OBJPROP_YDISTANCE, isLower ? y0 + H : y0);
+      ObjectSetInteger(0, bgName, OBJPROP_XSIZE, W);
+      ObjectSetInteger(0, bgName, OBJPROP_YSIZE, H);
+      ObjectSetInteger(0, bgName, OBJPROP_BGCOLOR, bg);
+      ObjectSetInteger(0, bgName, OBJPROP_BORDER_TYPE, BORDER_FLAT);
+      ObjectSetInteger(0, bgName, OBJPROP_COLOR, bg);
+      ObjectSetInteger(0, bgName, OBJPROP_SELECTABLE, false);
+      ObjectSetInteger(0, bgName, OBJPROP_HIDDEN, true);
+      ObjectSetInteger(0, bgName, OBJPROP_BACK, false);
+     }
+   else
+      LogOnce(LOG_ERRORS, "tblbg" + IntegerToString(GetLastError()), StringFormat("วาดพื้นตาราง %s ไม่สำเร็จ error %d", id, GetLastError()));
 
    for(int k = 0; k < n; k++)
      {
-      int r = k / g_tCols, c = k % g_tCols;
       if(g_tTxt[k] == "")
          continue;
+      int r = k / g_tCols, c = k % g_tCols;
       int colX = 6;
       for(int j = 0; j < c; j++)
          colX += colW[j];
       int rowY = 3 + r * rowH;
       string name = pfx + IntegerToString(k);
-      ObjectCreate(0, name, OBJ_LABEL, 0, 0, 0);
+      if(!ObjectCreate(0, name, OBJ_LABEL, 0, 0, 0))
+        {
+         LogOnce(LOG_ERRORS, "tbl" + IntegerToString(GetLastError()), StringFormat("วาดข้อความตาราง %s ไม่สำเร็จ error %d", id, GetLastError()));
+         continue;
+        }
       ObjectSetInteger(0, name, OBJPROP_CORNER, corner);
       ObjectSetInteger(0, name, OBJPROP_ANCHOR, ANCHOR_LEFT_UPPER);
       ObjectSetInteger(0, name, OBJPROP_XDISTANCE, isRight ? x0 + W - colX : x0 + colX);
@@ -1277,27 +1423,54 @@ void TEnd(const string id, const ENUM_BASE_CORNER corner)
      }
   }
 
+// Warn (once per layout) when the tables do not fit on the chart or overlap.
+void CheckLayout()
+  {
+   int cw = (int)ChartGetInteger(0, CHART_WIDTH_IN_PIXELS);
+   int ch = (int)ChartGetInteger(0, CHART_HEIGHT_IN_PIXELS, 0);
+   string warn = "";
+   if(cw > 0 && ch > 0)
+     {
+      if(g_cornerW[CORNER_LEFT_UPPER] + g_cornerW[CORNER_RIGHT_UPPER] > cw)
+         warn += "ตารางมุมซ้ายบนกับขวาบนกว้างรวมเกินจอ อาจทับกัน; ";
+      if(g_cornerW[CORNER_LEFT_LOWER] + g_cornerW[CORNER_RIGHT_LOWER] > cw)
+         warn += "ตารางมุมซ้ายล่างกับขวาล่างกว้างรวมเกินจอ อาจทับกัน; ";
+      if(g_stack[CORNER_LEFT_UPPER] + g_stack[CORNER_LEFT_LOWER] + 30 > ch)
+         warn += "ตารางฝั่งซ้ายสูงรวมเกินจอ อาจทับกัน; ";
+      if(g_stack[CORNER_RIGHT_UPPER] + g_stack[CORNER_RIGHT_LOWER] + 30 > ch)
+         warn += "ตารางฝั่งขวาสูงรวมเกินจอ อาจทับกัน; ";
+     }
+   string state = StringFormat("จอ %dx%d · %s", cw, ch, g_geoNow);
+   if(state != g_geoState)
+     {
+      g_geoState = state;
+      Log(LOG_DETAIL, "ตำแหน่งตาราง: " + state);
+      if(warn != "")
+         Log(LOG_NORMAL, "⚠ " + warn + "(ปรับมุมหรือซ่อนบางตารางใน Inputs) · " + state);
+     }
+  }
+
 string ThState(const int state)
   {
    return state > 0 ? "ขาขึ้น" : state < 0 ? "ขาลง" : "กลาง";
   }
 
 // TradingView trendScore: ADX below the range level = 50 (neutral), uptrend = 50 + ADX, downtrend = 50 - ADX.
-double TrendScore(const int dir, const double adx)
+double TrendScore(const int d, const double adx)
   {
-   if(dir == 0 || adx == EMPTY_VALUE || adx < InpAdxRangeLevel)
+   if(d == 0 || adx == EMPTY_VALUE || adx < InpAdxRangeLevel)
       return 50.0;
    double b = MathMin(adx, 50.0);
-   return dir < 0 ? 50.0 + b : 50.0 - b;
+   return d < 0 ? 50.0 + b : 50.0 - b;
   }
 
 // 1 = bullish, -1 = bearish, 0 = neutral
-int TrendState(const int dir, const double adx)
+int TrendState(const int d, const double adx)
   {
-   double s = TrendScore(dir, adx);
+   double s = TrendScore(d, adx);
    if(s >= 50.0 - InpNeutralZone && s <= 50.0 + InpNeutralZone)
       return 0;
-   return dir < 0 ? 1 : -1;
+   return d < 0 ? 1 : -1;
   }
 
 string PeriodText()
@@ -1338,34 +1511,88 @@ int PeriodSecondsOfStats()
      }
   }
 
+//--- Win rate per timeframe: run the same engine on each timeframe over the same calendar window.
+void ComputeTfTable(const bool force)
+  {
+   int days = MathMax(1, MathMin(InpTfStatsDays, 365));
+   datetime now = TimeCurrent();
+   datetime from = (datetime)((long)now - (long)days * 86400);
+   for(int k = 0; k < 5; k++)
+     {
+      ENUM_TIMEFRAMES tf = g_tfList[k];
+      int secs = PeriodSeconds(tf);
+      int warm = MathMax(300, InpAtrPeriod + InpAdxLength + InpAdxSmoothing + 2 * InpPivotLength + 210);
+      datetime start = (datetime)((long)from - (long)secs * warm);
+      MqlRates r[];
+      int got = CopyRates(_Symbol, tf, start, now, r);
+      if(got < warm / 2)
+        {
+         g_tfOk[k] = false;
+         Log(LOG_DETAIL, StringFormat("ตารางเทียบ TF: ข้อมูล %s ยังไม่พร้อม (ได้ %d แท่ง, error %d)", TfName(tf), got, GetLastError()));
+         continue;
+        }
+      if(!force && g_tfOk[k] && r[got - 1].time == g_tfLast[k])
+         continue;   // nothing new on this timeframe
+      double h[], l[], c[];
+      datetime t[];
+      ArrayResize(h, got);
+      ArrayResize(l, got);
+      ArrayResize(c, got);
+      ArrayResize(t, got);
+      for(int i = 0; i < got; i++)
+        {
+         h[i] = r[i].high;
+         l[i] = r[i].low;
+         c[i] = r[i].close;
+         t[i] = r[i].time;
+        }
+      CEngine e;
+      e.Init(tf);
+      if(e.htfOn && !e.LoadHtf(t[0]))
+        {
+         g_tfOk[k] = false;
+         continue;
+        }
+      e.Reset(got, 0);
+      BarEvents ev;
+      for(int i = 0; i < got; i++)
+         e.Step(i, h, l, c);
+      for(int i = 1; i <= got - 2; i++)
+         e.Closed(i, t, h, l, c, ev);
+      int sigs = 0, wins = 0, losses = 0;
+      double sumR = 0.0;
+      e.Stats(from, sigs, wins, losses, sumR);
+      g_tfSignals[k] = sigs;
+      g_tfWins[k] = wins;
+      g_tfLosses[k] = losses;
+      g_tfSumR[k] = sumR;
+      g_tfLast[k] = r[got - 1].time;
+      g_tfOk[k] = true;
+      Log(LOG_DETAIL, StringFormat("ตารางเทียบ TF %s: %d แท่ง สัญญาณ %d ชนะ %d แพ้ %d กำไร %.2fR", TfName(tf), got,
+                                   g_tfSignals[k], g_tfWins[k], g_tfLosses[k], g_tfSumR[k]));
+     }
+   g_tfComputed = now;
+  }
+
 void DrawDashboards()
   {
+   if(!InpDrawObjects)
+      return;
    ArrayInitialize(g_stack, 0);
+   ArrayInitialize(g_cornerW, 0);
+   g_geoNow = "";
    color fg = ChartFg();
    color headClr = InpEntryColor;
    bool hideAll = InpHideAllDashboards || !g_haveData;
 
-   //--- Statistics
+   //--- Statistics of this chart's timeframe
    if(!hideAll && InpStatsMode != DASH_HIDDEN)
      {
       int secs = PeriodSecondsOfStats();
-      datetime cutoff = secs > 0 ? g_dashNow - secs : 0;
-      int signals = 0, wins = 0, losses = 0;
-      double sumR = 0.0;
-      for(int k = 0; k < g_recCount; k++)
-        {
-         if(g_recs[k].time < cutoff)
-            continue;
-         signals++;
-         if(g_recs[k].resolved)
-           {
-            sumR += g_recs[k].statR;
-            if(g_recs[k].win)
-               wins++;
-            else
-               losses++;
-           }
-        }
+      datetime cutoff = secs > 0 ? (datetime)((long)g_dashNow - secs) : 0;
+      int signals, wins, losses;
+      double sumR;
+      g_eng.Stats(cutoff, signals, wins, losses, sumR);
       int closed = wins + losses;
       string wr = closed > 0 ? DoubleToString(100.0 * wins / closed, 1) + " %" : "-";
       color pc = sumR >= 0.0 ? InpUpColor : InpDownColor;
@@ -1374,14 +1601,14 @@ void DrawDashboards()
       TBegin(2);
       if(InpStatsMode == DASH_COMPACT)
         {
-         TCell("อัตราชนะ (" + PeriodText() + ")", headClr, tipWr);
+         TCell("อัตราชนะ " + TfName(PERIOD_CURRENT) + " (" + PeriodText() + ")", headClr, tipWr);
          TCell(wr, fg, tipWr);
          TCell("กำไร", pc, tipR);
          TCell(DoubleToString(sumR, 2) + " R", pc, tipR);
         }
       else
         {
-         TCell("สถิติย้อนหลัง · " + PeriodText(), headClr, "นับสัญญาณที่เกิดในช่วงเวลาที่เลือก จากแท่งที่คำนวณบนกราฟนี้");
+         TCell("สถิติย้อนหลัง " + TfName(PERIOD_CURRENT) + " · " + PeriodText(), headClr, "นับสัญญาณที่เกิดในช่วงเวลาที่เลือก จากแท่งที่คำนวณบนกราฟนี้");
          TCell("", fg);
          TCell("สัญญาณ", fg, "จำนวน BUY + SELL");
          TCell(IntegerToString(signals), fg);
@@ -1400,6 +1627,48 @@ void DrawDashboards()
      }
    else
       ObjectsDeleteAll(0, g_prefix + "Dstats_");
+
+   //--- Win rate per timeframe
+   if(!hideAll && InpTfStatsMode != DASH_HIDDEN)
+     {
+      int best = -1;
+      for(int k = 0; k < 5; k++)
+         if(g_tfOk[k] && g_tfWins[k] + g_tfLosses[k] > 0 && (best < 0 || g_tfSumR[k] > g_tfSumR[best]))
+            best = k;
+      string tip = StringFormat("ใช้สูตรและค่าตั้งเดียวกับกราฟนี้ นับสัญญาณใน %d วันล่าสุดของทุก TF · ★ = กำไร R รวมสูงสุด · ยังไม่หักสเปรด", InpTfStatsDays);
+      if(InpTfStatsMode == DASH_COMPACT)
+         TBegin(1);
+      else
+        {
+         TBegin(5);
+         TCell(StringFormat("เทียบ TF (%d วัน)", InpTfStatsDays), headClr, tip);
+         TCell("สัญญาณ", headClr, tip);
+         TCell("ชนะ/แพ้", headClr, tip);
+         TCell("อัตราชนะ", headClr, tip);
+         TCell("กำไร R", headClr, tip);
+        }
+      for(int k = 0; k < 5; k++)
+        {
+         string name = TfName(g_tfList[k]) + (k == best ? " ★" : "") + (g_tfList[k] == (ENUM_TIMEFRAMES)_Period ? " •" : "");
+         int closed = g_tfWins[k] + g_tfLosses[k];
+         string wr = (g_tfOk[k] && closed > 0) ? DoubleToString(100.0 * g_tfWins[k] / closed, 1) + "%" : "-";
+         color rc = !g_tfOk[k] ? fg : g_tfSumR[k] >= 0.0 ? InpUpColor : InpDownColor;
+         string rText = g_tfOk[k] ? StringFormat("%+.1fR", g_tfSumR[k]) : "รอข้อมูล";
+         if(InpTfStatsMode == DASH_COMPACT)
+            TCell(name + "  " + wr + "  " + rText, rc, tip);
+         else
+           {
+            TCell(name, k == best ? headClr : fg, tip);
+            TCell(g_tfOk[k] ? IntegerToString(g_tfSignals[k]) : "-", fg);
+            TCell(g_tfOk[k] ? IntegerToString(g_tfWins[k]) + "/" + IntegerToString(g_tfLosses[k]) : "-", fg);
+            TCell(wr, fg);
+            TCell(rText, rc);
+           }
+        }
+      TEnd("tfs", InpTfStatsCorner);
+     }
+   else
+      ObjectsDeleteAll(0, g_prefix + "Dtfs_");
 
    //--- ADX
    if(!hideAll && InpAdxMode != DASH_HIDDEN)
@@ -1445,11 +1714,10 @@ void DrawDashboards()
    else
       ObjectsDeleteAll(0, g_prefix + "Dadx_");
 
-   //--- Multi-timeframe
+   //--- Multi-timeframe trend
    if(!hideAll && InpMtfMode != DASH_HIDDEN)
      {
       ENUM_TIMEFRAMES tfs[5] = {PERIOD_M5, PERIOD_M15, PERIOD_H1, PERIOD_H4, PERIOD_D1};
-      string names[5] = {"M5", "M15", "H1", "H4", "D1"};
       string tipScore = "คะแนน 0–100: ADX < " + DoubleToString(InpAdxRangeLevel, 0) + " = 50 · ขาขึ้น = 50 + ADX · ขาลง = 50 − ADX";
       if(InpMtfMode == DASH_COMPACT)
          TBegin(5);
@@ -1463,24 +1731,27 @@ void DrawDashboards()
       for(int k = 0; k < 5; k++)
         {
          MqlRates r[];
-         int dir = 0;
+         int d = 0;
          double adx = EMPTY_VALUE;
-         if(CopyRates(_Symbol, tfs[k], 0, 400, r) > InpAtrPeriod + InpAdxLength + InpAdxSmoothing)
+         int got = CopyRates(_Symbol, tfs[k], 0, 400, r);
+         if(got > InpAtrPeriod + InpAdxLength + InpAdxSmoothing)
            {
-            int d[];
-            RatesSupertrend(r, d);
-            dir = d[ArraySize(d) - 1];
+            int dd[];
+            RatesSupertrend(r, dd);
+            d = dd[ArraySize(dd) - 1];
             adx = RatesAdxLast(r);
            }
-         double sc = TrendScore(dir, adx);
-         int state = TrendState(dir, adx);
+         else
+            Log(LOG_DETAIL, StringFormat("เทรนด์หลาย TF: ข้อมูล %s ยังไม่พร้อม (ได้ %d แท่ง)", TfName(tfs[k]), got));
+         double sc = TrendScore(d, adx);
+         int state = TrendState(d, adx);
          color sclr = state > 0 ? InpUpColor : state < 0 ? InpDownColor : fg;
          string arrow = state > 0 ? "▲" : state < 0 ? "▼" : "•";
          if(InpMtfMode == DASH_COMPACT)
-            TCell(names[k] + " " + arrow, sclr, names[k] + ": " + ThState(state) + " (คะแนน " + DoubleToString(sc, 0) + ") · ▲ ขึ้น ▼ ลง • กลาง");
+            TCell(TfName(tfs[k]) + " " + arrow, sclr, TfName(tfs[k]) + ": " + ThState(state) + " (คะแนน " + DoubleToString(sc, 0) + ") · ▲ ขึ้น ▼ ลง • กลาง");
          else
            {
-            TCell(names[k], fg);
+            TCell(TfName(tfs[k]), fg);
             TCell(DoubleToString(sc, 1), sclr, tipScore);
             TCell(ThState(state), sclr);
            }
@@ -1502,73 +1773,38 @@ void DrawDashboards()
       TCell("R", headClr, "ผลเป็นหน่วย R ถ้าปิดที่ TP สูงสุดที่ไปถึง · SL = −1R · กลับทิศ = R จริงตอนปิดแท่ง");
       TCell("โดน SL", headClr, "ใช่ = ราคาแตะ SL (ก่อนหรือหลังถึง TP)");
       int shown = 0;
-      for(int k = g_recCount - 1; k >= 0 && shown < maxRows; k--)
+      for(int k = g_eng.recCount - 1; k >= 0 && shown < maxRows; k--)
         {
-         if(!g_recs[k].histDone)
+         if(!g_eng.recs[k].histDone)
             continue;
          shown++;
-         string oc = g_recs[k].outcome == "REV" ? "กลับทิศ" : g_recs[k].outcome;
+         string oc = g_eng.recs[k].outcome == "REV" ? "กลับทิศ" : g_eng.recs[k].outcome;
          TCell(IntegerToString(shown), fg);
-         TCell(g_recs[k].side > 0 ? "ซื้อ" : "ขาย", g_recs[k].side > 0 ? InpUpColor : InpDownColor);
-         TCell(oc, g_recs[k].outcome == "SL" ? InpDownColor : g_recs[k].outcome == "REV" ? fg : InpUpColor, tipOutcome);
-         TCell(DoubleToString(g_recs[k].histR, 2) + "R", g_recs[k].histR >= 0.0 ? InpUpColor : InpDownColor);
-         TCell(g_recs[k].slHit ? "ใช่" : "ไม่", g_recs[k].slHit ? InpDownColor : InpUpColor);
+         TCell(g_eng.recs[k].side > 0 ? "ซื้อ" : "ขาย", g_eng.recs[k].side > 0 ? InpUpColor : InpDownColor);
+         TCell(oc, g_eng.recs[k].outcome == "SL" ? InpDownColor : g_eng.recs[k].outcome == "REV" ? fg : InpUpColor, tipOutcome);
+         TCell(DoubleToString(g_eng.recs[k].histR, 2) + "R", g_eng.recs[k].histR >= 0.0 ? InpUpColor : InpDownColor);
+         TCell(g_eng.recs[k].slHit ? "ใช่" : "ไม่", g_eng.recs[k].slHit ? InpDownColor : InpUpColor);
         }
       TEnd("hist", InpHistoryCorner);
      }
    else
       ObjectsDeleteAll(0, g_prefix + "Dhist_");
+   CheckLayout();
    ChartRedraw();
   }
 
 //+------------------------------------------------------------------+
 //| Indicator events                                                 |
 //+------------------------------------------------------------------+
-void ResetState(const int ratesTotal)
-  {
-   g_first = MathMax(0, ratesTotal - MathMax(InpMaxBars, 300));
-   g_lastClosed = g_first;   // first bar has no previous bar for a signal
-   g_tDir = 0;
-   g_entry = EMPTY_VALUE;
-   g_sl = EMPTY_VALUE;
-   g_tp1 = EMPTY_VALUE;
-   g_tp2 = EMPTY_VALUE;
-   g_tp3 = EMPTY_VALUE;
-   g_tradeBar = -1;
-   g_tp1Reached = false;
-   g_tp2Reached = false;
-   g_tp3Reached = false;
-   g_resolved = false;
-   g_histRecorded = false;
-   g_reLongArmed = false;
-   g_reShortArmed = false;
-   g_emaLongPull = false;
-   g_emaShortPull = false;
-   g_prevSupP = EMPTY_VALUE;
-   g_lastSupP = EMPTY_VALUE;
-   g_prevResP = EMPTY_VALUE;
-   g_lastResP = EMPTY_VALUE;
-   g_prevSupB = -1;
-   g_lastSupB = -1;
-   g_prevResB = -1;
-   g_lastResB = -1;
-   ArrayResize(g_kSupPrice, 0);
-   ArrayResize(g_kResPrice, 0);
-   ArrayResize(g_kSupBar, 0);
-   ArrayResize(g_kResBar, 0);
-   ArrayResize(g_recs, 0);
-   g_recCount = 0;
-   ObjectsDeleteAll(0, g_prefix);
-  }
-
 int OnInit()
   {
    if(InpFactor <= 0.0 || InpAtrPeriod < 1 || InpSlAtrMult <= 0.0 || InpTp1R <= 0.0 || InpTp2R <= 0.0 || InpTp3R <= 0.0
       || InpAdxLength < 1 || InpAdxSmoothing < 1 || InpPivotLength < 1 || InpKeyLevelsCount < 1)
      {
-      Print("ST TP/SL: ค่าที่ตั้งไม่ถูกต้อง (ต้องมากกว่า 0)");
+      Print("[ST67][IND] ค่าที่ตั้งไม่ถูกต้อง (ต้องมากกว่า 0)");
       return INIT_PARAMETERS_INCORRECT;
      }
+   g_logTag = "[ST67][IND " + TfName(PERIOD_CURRENT) + (InpDrawObjects ? " แสดงผล" : " ใช้เทรด") + "]";
    SetIndexBuffer(0, B_stUp, INDICATOR_DATA);
    SetIndexBuffer(1, B_stDn, INDICATOR_DATA);
    SetIndexBuffer(2, B_fillClose, INDICATOR_DATA);
@@ -1591,14 +1827,6 @@ int OnInit()
    SetIndexBuffer(19, B_dir, INDICATOR_DATA);
    SetIndexBuffer(20, B_atr, INDICATOR_DATA);
    SetIndexBuffer(21, B_adx, INDICATOR_DATA);
-   SetIndexBuffer(22, B_upper, INDICATOR_CALCULATIONS);
-   SetIndexBuffer(23, B_lower, INDICATOR_CALCULATIONS);
-   SetIndexBuffer(24, B_trur, INDICATOR_CALCULATIONS);
-   SetIndexBuffer(25, B_plusS, INDICATOR_CALCULATIONS);
-   SetIndexBuffer(26, B_minusS, INDICATOR_CALCULATIONS);
-   SetIndexBuffer(27, B_dx, INDICATOR_CALCULATIONS);
-   SetIndexBuffer(28, B_adxRaw, INDICATOR_CALCULATIONS);
-
    for(int p = 0; p < 17; p++)
       PlotIndexSetDouble(p, PLOT_EMPTY_VALUE, EMPTY_VALUE);
 
@@ -1631,6 +1859,8 @@ int OnInit()
      }
    if(!InpShowFill)
       PlotIndexSetInteger(2, PLOT_DRAW_TYPE, DRAW_NONE);
+   if(!InpShowCandleColors && !InpShowFill)
+      PlotIndexSetInteger(3, PLOT_DRAW_TYPE, DRAW_NONE);
    if(!InpShowSignals)
      {
       PlotIndexSetInteger(4, PLOT_DRAW_TYPE, DRAW_NONE);
@@ -1641,15 +1871,28 @@ int OnInit()
    if(!InpReentryEma && !InpReentryEmaFast)
       PlotIndexSetInteger(7, PLOT_DRAW_TYPE, DRAW_NONE);
 
-   g_htfOn = InpHtfFilterTf != PERIOD_CURRENT && PeriodSeconds(InpHtfFilterTf) > PeriodSeconds();
-   if(InpHtfFilterTf != PERIOD_CURRENT && !g_htfOn)
-      Print("ST TP/SL: ไม่ใช้ตัวกรอง TF ใหญ่ เพราะ ", TfName(InpHtfFilterTf), " ไม่ใหญ่กว่า ", TfName(PERIOD_CURRENT));
-
+   g_eng.Init((ENUM_TIMEFRAMES)_Period);
+   if(InpHtfFilterTf != PERIOD_CURRENT && !g_eng.htfOn)
+      Log(LOG_NORMAL, "ไม่ใช้ตัวกรอง TF ใหญ่ เพราะ " + TfName(InpHtfFilterTf) + " ไม่ใหญ่กว่า " + TfName(PERIOD_CURRENT));
+   for(int k = 0; k < 5; k++)
+     {
+      g_tfLast[k] = 0;
+      g_tfOk[k] = false;
+      g_tfSignals[k] = 0;
+      g_tfWins[k] = 0;
+      g_tfLosses[k] = 0;
+      g_tfSumR[k] = 0.0;
+     }
    MathSrand((uint)GetTickCount());
    g_prefix = "STI" + IntegerToString(MathRand()) + "_";
-   IndicatorSetString(INDICATOR_SHORTNAME, "ST TP/SL v" + IND_VERSION);
+   IndicatorSetString(INDICATOR_SHORTNAME, "ST TP/SL v" + IND_VERSION + " " + TfName(PERIOD_CURRENT));
    IndicatorSetInteger(INDICATOR_DIGITS, _Digits);
-   EventSetTimer(10);
+   Log(LOG_NORMAL, StringFormat("เริ่ม v%s %s · Factor %.2f ATR %d SL×%.2f TP %.1f/%.1f/%.1fR · ADX กรอง %s · TF ใหญ่ %s · EMA200 %s · เบรก %s · เข้าซ้ำ %s/%s/%s",
+                                IND_VERSION, _Symbol, InpFactor, InpAtrPeriod, InpSlAtrMult, InpTp1R, InpTp2R, InpTp3R,
+                                InpUseAdxFilter ? "เปิด" : "ปิด", g_eng.htfOn ? TfName(InpHtfFilterTf) : "ปิด", InpUseEma200Filter ? "เปิด" : "ปิด",
+                                InpBreakoutSignals ? "เปิด" : "ปิด", InpReentrySt ? "เปิด" : "ปิด", InpReentryEma ? "เปิด" : "ปิด", InpReentryEmaFast ? "เปิด" : "ปิด"));
+   if(InpDrawObjects)
+      EventSetTimer(10);
    return INIT_SUCCEEDED;
   }
 
@@ -1662,8 +1905,11 @@ void OnDeinit(const int reason)
 
 void OnTimer()
   {
-   if(g_haveData)
-      DrawDashboards();
+   if(!g_haveData || !InpDrawObjects)
+      return;
+   if(!InpHideAllDashboards && InpTfStatsMode != DASH_HIDDEN && (long)TimeCurrent() - (long)g_tfComputed >= 60)
+      ComputeTfTable(false);
+   DrawDashboards();
   }
 
 int OnCalculate(const int rates_total,
@@ -1679,13 +1925,19 @@ int OnCalculate(const int rates_total,
   {
    int minBars = MathMax(InpAtrPeriod, InpAdxLength + InpAdxSmoothing) + 2 * InpPivotLength + 5;
    if(rates_total < minBars)
+     {
+      LogOnce(LOG_NORMAL, "fewbars", StringFormat("แท่งบนกราฟยังน้อยเกินไป (%d < %d) รอข้อมูล", rates_total, minBars));
       return 0;
+     }
    bool full = prev_calculated == 0 || prev_calculated > rates_total;
+   ulong t0 = GetMicrosecondCount();
    int start;
    if(full)
      {
-      ResetState(rates_total);
-      for(int i = 0; i < g_first; i++)
+      int first = MathMax(0, rates_total - MathMax(InpMaxBars, 300));
+      g_eng.Reset(rates_total, first);
+      ObjectsDeleteAll(0, g_prefix);
+      for(int i = 0; i < first; i++)
         {
          B_stUp[i] = EMPTY_VALUE;
          B_stDn[i] = EMPTY_VALUE;
@@ -1709,45 +1961,129 @@ int OnCalculate(const int rates_total,
          B_dir[i] = 0.0;
          B_atr[i] = EMPTY_VALUE;
          B_adx[i] = EMPTY_VALUE;
-         B_upper[i] = EMPTY_VALUE;
-         B_lower[i] = EMPTY_VALUE;
-         B_trur[i] = EMPTY_VALUE;
-         B_plusS[i] = EMPTY_VALUE;
-         B_minusS[i] = EMPTY_VALUE;
-         B_dx[i] = EMPTY_VALUE;
-         B_adxRaw[i] = EMPTY_VALUE;
         }
-      start = g_first;
+      start = first;
      }
    else
+     {
+      g_eng.Resize(rates_total);
       start = prev_calculated - 1;
+     }
 
-   bool newClosed = rates_total - 2 > g_lastClosed;
+   bool newClosed = rates_total - 2 > g_eng.lastClosed;
    //--- The higher-timeframe series must include the candles that closed since the last call.
-   if(g_htfOn && (full || newClosed) && !LoadHtf(time[g_first]))
+   if(g_eng.htfOn && (full || newClosed) && !g_eng.LoadHtf(time[g_eng.first]))
       return full ? 0 : prev_calculated;
 
    for(int i = start; i < rates_total; i++)
-      StepBar(i, open, high, low, close);
+     {
+      g_eng.Step(i, high, low, close);
+      double s = g_eng.st[i];
+      int d = (int)g_eng.dir[i];
+      B_st[i] = s;
+      B_dir[i] = d;
+      B_atr[i] = g_eng.atr[i];
+      B_adx[i] = g_eng.adx[i];
+      B_ema200[i] = g_eng.ema200[i];
+      B_emaRe[i] = g_eng.emaRe[i];
+      B_fillClose[i] = s == EMPTY_VALUE ? EMPTY_VALUE : close[i];
+      B_stUp[i] = (InpShowTrendLine && d < 0) ? s : EMPTY_VALUE;
+      B_stDn[i] = (InpShowTrendLine && d > 0) ? s : EMPTY_VALUE;
+      if(InpShowCandleColors || InpShowFill)
+        {
+         B_cO[i] = open[i];
+         B_cH[i] = high[i];
+         B_cL[i] = low[i];
+         B_cC[i] = close[i];
+         if(InpShowCandleColors && d != 0)
+            B_cClr[i] = d < 0 ? 0.0 : 1.0;
+         else
+            B_cClr[i] = close[i] >= open[i] ? 0.0 : 1.0;
+        }
+      else
+        {
+         B_cO[i] = EMPTY_VALUE;
+         B_cH[i] = EMPTY_VALUE;
+         B_cL[i] = EMPTY_VALUE;
+         B_cC[i] = EMPTY_VALUE;
+         B_cClr[i] = 0.0;
+        }
+      //--- Signal outputs: set below for closed candles only.
+      B_sig[i] = 0.0;
+      B_buy[i] = EMPTY_VALUE;
+      B_sell[i] = EMPTY_VALUE;
+      B_entry[i] = EMPTY_VALUE;
+      B_sl[i] = EMPTY_VALUE;
+      B_tp1[i] = EMPTY_VALUE;
+      B_tp2[i] = EMPTY_VALUE;
+      B_tp3[i] = EMPTY_VALUE;
+     }
 
-   for(int i = g_lastClosed + 1; i <= rates_total - 2; i++)
-      ProcessClosedBar(i, rates_total, time, high, low, close, !full);
-   if(rates_total - 2 > g_lastClosed)
-      g_lastClosed = rates_total - 2;
+   int signalsNow = 0;
+   BarEvents ev;
+   for(int i = g_eng.lastClosed + 1; i <= rates_total - 2; i++)
+     {
+      g_eng.Closed(i, time, high, low, close, ev);
+      B_sig[i] = ev.sell ? -1.0 : ev.buy ? 1.0 : 0.0;
+      if(g_eng.entry != EMPTY_VALUE)
+        {
+         B_entry[i] = g_eng.entry;
+         B_sl[i] = g_eng.sl;
+         B_tp1[i] = g_eng.tp1;
+         B_tp2[i] = g_eng.tp2;
+         B_tp3[i] = g_eng.tp3;
+        }
+      if(InpShowSignals)
+        {
+         B_buy[i] = ev.buy ? low[i] : EMPTY_VALUE;
+         B_sell[i] = ev.sell ? high[i] : EMPTY_VALUE;
+        }
+      if(ev.buy || ev.sell)
+         signalsNow++;
+      if(InpDrawObjects && i >= rates_total - InpObjectBars)
+         DrawBarEvents(i, time, high, low, close, ev);
+      if(!full && i == rates_total - 2)
+        {
+         Log(LOG_DETAIL, StringFormat("แท่ง %s ปิด: ทิศ %d ป้าย %s ATR %s ADX %s", TimeToString(time[i]), (int)g_eng.dir[i],
+                                      ev.sell ? "SELL" : ev.buy ? "BUY" : "-", Fmt(g_eng.atr[i]),
+                                      g_eng.adx[i] == EMPTY_VALUE ? "-" : DoubleToString(g_eng.adx[i], 1)));
+         //--- Alerts (live candles only, not while loading history)
+         string head = _Symbol + " [" + TfName(PERIOD_CURRENT) + "]";
+         if(InpAlertOnTpSl)
+            for(int k = 2; k >= 0; k--)
+               if(ev.tpHit[k])
+                 {
+                  Notify("✅ ถึง TP" + IntegerToString(k + 1) + " " + head + "\nราคา: " + Fmt(ev.tpPrice[k]));
+                  break;
+                 }
+         if(InpAlertOnTpSl && ev.slHit)
+            Notify("⛔ โดน SL " + head + "\nSL: " + Fmt(ev.slPrice));
+         if(InpAlertOnSignal && (ev.buy || ev.sell))
+            Notify((ev.sell ? "🔴 SELL (ขาย) " : "🟢 BUY (ซื้อ) ") + head
+                   + "\nเข้า: " + Fmt(g_eng.entry)
+                   + "\nSL: " + Fmt(g_eng.sl) + " (ระยะ " + Fmt(MathAbs(g_eng.entry - g_eng.sl)) + ")"
+                   + "\nTP1: " + Fmt(g_eng.tp1) + "\nTP2: " + Fmt(g_eng.tp2) + "\nTP3: " + Fmt(g_eng.tp3));
+        }
+     }
 
-   //--- Dashboard values from the current candle (same as TradingView barstate.islast)
    int last = rates_total - 1;
-   g_dashAdx = B_adx[last];
-   g_dashDir = (int)B_dir[last];
-   g_dashPlusDi = (B_trur[last] != EMPTY_VALUE && B_trur[last] > 0.0 && B_plusS[last] != EMPTY_VALUE) ? 100.0 * B_plusS[last] / B_trur[last] : EMPTY_VALUE;
-   g_dashMinusDi = (B_trur[last] != EMPTY_VALUE && B_trur[last] > 0.0 && B_minusS[last] != EMPTY_VALUE) ? 100.0 * B_minusS[last] / B_trur[last] : EMPTY_VALUE;
+   g_dashAdx = g_eng.adx[last];
+   g_dashDir = (int)g_eng.dir[last];
+   g_dashPlusDi = g_eng.PlusDi(last);
+   g_dashMinusDi = g_eng.MinusDi(last);
    g_dashNow = time[last];
    g_haveData = true;
 
-   if(full || newClosed)
+   if(full)
+      Log(LOG_NORMAL, StringFormat("คำนวณใหม่ทั้งหมด %d แท่ง (%s ถึง %s) สัญญาณ %d ครั้ง ใช้เวลา %.0f ms",
+                                   rates_total - g_eng.first, TimeToString(time[g_eng.first]), TimeToString(time[last]),
+                                   signalsNow, (GetMicrosecondCount() - t0) / 1000.0));
+   if(InpDrawObjects && (full || newClosed))
      {
       DrawTradeObjects(rates_total, time);
       DrawPatternObjects(rates_total, time);
+      if(!InpHideAllDashboards && InpTfStatsMode != DASH_HIDDEN && (full || (long)TimeCurrent() - (long)g_tfComputed >= 60))
+         ComputeTfTable(full);
       DrawDashboards();
      }
    return rates_total;

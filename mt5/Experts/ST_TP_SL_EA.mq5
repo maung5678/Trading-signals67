@@ -3,9 +3,11 @@
 //|  Expert Advisor for the Supertrend TP/SL indicator.              |
 //|                                                                  |
 //|  The indicator (Indicators/ST_TP_SL.mq5) is embedded as a        |
-//|  resource. The EA reads its signal buffers on the trade          |
-//|  timeframe, so the BUY/SELL labels on the chart and the orders   |
-//|  always come from the same code.                                 |
+//|  resource. One hidden instance runs on the trade timeframe and   |
+//|  gives the signals; a second instance on the chart timeframe     |
+//|  only draws (so any timeframe can be viewed while the EA keeps   |
+//|  trading its own). Same code, so the labels on a chart of the    |
+//|  trade timeframe are exactly where the EA trades.                |
 //|                                                                  |
 //|  Order levels: Entry/SL/TP of the signal candle close (same as   |
 //|  the chart), then adjusted by the live spread: SL moved away     |
@@ -20,13 +22,13 @@
 //+------------------------------------------------------------------+
 #property copyright   "Trading-signals67"
 #property link        "https://github.com/maung5678/Trading-signals67"
-#property version     "1.10"
-#property description "Supertrend TP/SL EA v1.10: เปิดออเดอร์ตามป้าย BUY/SELL ของอินดิเคเตอร์ พร้อม SL และ TP1–TP3"
+#property version     "1.11"
+#property description "Supertrend TP/SL EA v1.11: เปิดออเดอร์ตามป้าย BUY/SELL ของอินดิเคเตอร์ พร้อม SL และ TP1–TP3"
 
 #resource "\\Indicators\\ST_TP_SL.ex5"
 #include <Trade/Trade.mqh>
 
-#define EA_VERSION "1.10"
+#define EA_VERSION "1.11"
 #define IND_PATH   "::Indicators\\ST_TP_SL.ex5"
 //--- Indicator buffer numbers
 #define BUF_ST    3
@@ -75,6 +77,13 @@ enum ENUM_STATS_PERIOD
    STATS_ALL = 5   // ทั้งหมดที่คำนวณ
   };
 
+enum ENUM_LOG_LEVEL
+  {
+   LOG_ERRORS = 0, // เฉพาะข้อผิดพลาด
+   LOG_NORMAL = 1, // ปกติ
+   LOG_DETAIL = 2  // ละเอียด (ใช้ตอนทดสอบ / ส่งให้ตรวจ)
+  };
+
 //--- Main settings
 input group "ตั้งค่าหลัก"
 input ENUM_TIMEFRAMES    InpTradeTf        = PERIOD_M15;         // TF ที่ใช้เทรด (ไม่ขึ้นกับ TF ของกราฟ)
@@ -91,9 +100,10 @@ input int                InpSlippagePts    = 30;                 // Slippage ส
 input int                InpMaxDelayPct    = 50;                 // เข้าได้ภายในกี่ % ของแท่งหลังสัญญาณปิด
 input bool               InpEaPush         = true;               // ส่งแจ้งเตือนเข้าแอป MT5 มือถือ
 input bool               InpEaPopup        = false;              // แสดง Alert popup บนคอม
-input bool               InpShowIndicator  = true;               // แสดงอินดิเคเตอร์บนกราฟ (เมื่อ TF ตรงกัน)
+input bool               InpShowIndicator  = true;               // แสดงอินดิเคเตอร์บนกราฟ (ตาม TF ที่กราฟเปิด)
 input bool               InpShowPanel      = true;               // แสดงแผงสถานะ EA
 input bool               InpShowSentLevels = true;               // แสดงราคา SL/TP ที่ส่งจริง (ตัวเล็ก)
+input ENUM_LOG_LEVEL     InpLogLevel       = LOG_NORMAL;         // ระดับ log (แท็บ Experts) ละเอียด = ใช้ส่งให้ตรวจ
 
 //--- Indicator settings (passed to the embedded indicator)
 input group "สัญญาณ"
@@ -118,9 +128,12 @@ input int               InpMaxBars           = 5000;  // จำนวนแท�
 input int               InpObjectBars        = 1500;  // วาดป้ายย้อนหลังกี่แท่ง
 input group "แดชบอร์ด"
 input bool              InpHideAllDashboards = false;              // ซ่อนแดชบอร์ดทั้งหมด
-input ENUM_DASH_MODE    InpStatsMode         = DASH_COMPACT;       // สถิติชนะ/แพ้ของสัญญาณ
+input ENUM_DASH_MODE    InpStatsMode         = DASH_COMPACT;       // สถิติชนะ/แพ้ (TF ของกราฟ)
 input ENUM_STATS_PERIOD InpStatsPeriod       = STATS_ALL;          // ช่วงเวลาของสถิติ
 input ENUM_BASE_CORNER  InpStatsCorner       = CORNER_RIGHT_UPPER; // ตำแหน่งสถิติ
+input ENUM_DASH_MODE    InpTfStatsMode       = DASH_FULL;          // ตารางเทียบอัตราชนะหลาย TF
+input int               InpTfStatsDays       = 30;                 // ตารางเทียบ: นับย้อนหลังกี่วัน
+input ENUM_BASE_CORNER  InpTfStatsCorner     = CORNER_LEFT_LOWER;  // ตำแหน่งตารางเทียบ
 input ENUM_DASH_MODE    InpAdxMode           = DASH_COMPACT;       // แดชบอร์ด ADX
 input ENUM_BASE_CORNER  InpAdxCorner         = CORNER_RIGHT_UPPER; // ตำแหน่ง ADX
 input ENUM_DASH_MODE    InpMtfMode           = DASH_COMPACT;       // เทรนด์หลายไทม์เฟรม
@@ -183,7 +196,8 @@ input double            InpNeutralZone       = 10.0;  // โซนกลาง �
 
 //--- Globals
 CTrade          g_trade;
-int             g_handle = INVALID_HANDLE;
+int             g_handle = INVALID_HANDLE;      // trade timeframe (signals)
+int             g_dispHandle = INVALID_HANDLE;  // chart timeframe (drawing), may equal g_handle
 ENUM_TIMEFRAMES g_tf = PERIOD_M15;
 ulong           g_magic = 0;
 bool            g_netting = false;
@@ -197,7 +211,9 @@ string          g_lastEvent = "-";
 string          g_filterState = "ปกติ";
 bool            g_resultsDirty = true;
 datetime        g_resultsTime = 0;
+datetime        g_waitSince = 0;
 MqlParam        g_params[];
+string          g_onceKeys[];
 
 //+------------------------------------------------------------------+
 //| Small helpers                                                    |
@@ -258,12 +274,33 @@ long DayNumber()
    return (long)TimeCurrent() / 86400;
   }
 
+void Log(const ENUM_LOG_LEVEL level, const string msg)
+  {
+   if(level <= InpLogLevel)
+      Print("[ST67][EA ", _Symbol, " ", TfName(g_tf), "] ", msg);
+  }
+
+// Log a message only the first time `key` is seen (avoids flooding the journal).
+void LogOnce(const ENUM_LOG_LEVEL level, const string key, const string msg)
+  {
+   int n = ArraySize(g_onceKeys);
+   for(int i = 0; i < n; i++)
+      if(g_onceKeys[i] == key)
+         return;
+   if(n < 500)
+     {
+      ArrayResize(g_onceKeys, n + 1);
+      g_onceKeys[n] = key;
+     }
+   Log(level, msg);
+  }
+
 void Notify(const string msg, const bool push = true)
   {
-   Print(msg);
-   string oneLine = msg;
-   StringReplace(oneLine, "\n", " · ");
-   g_lastEvent = TimeToString(TimeCurrent(), TIME_MINUTES) + " " + oneLine;
+   string oneLog = msg;
+   StringReplace(oneLog, "\n", " · ");
+   Log(StringFind(msg, "❌") == 0 ? LOG_ERRORS : LOG_NORMAL, oneLog);
+   g_lastEvent = TimeToString(TimeCurrent(), TIME_MINUTES) + " " + oneLog;
    if(!push)
       return;
    if(InpEaPopup)
@@ -324,7 +361,7 @@ void ParamInt(const long v)    { ParamAdd(TYPE_INT, v, 0.0, ""); }
 void ParamDbl(const double v)  { ParamAdd(TYPE_DOUBLE, 0, v, ""); }
 void ParamBool(const bool v)   { ParamAdd(TYPE_BOOL, v ? 1 : 0, 0.0, ""); }
 
-void BuildIndicatorParams()
+void BuildIndicatorParams(const bool draw)
   {
    ArrayResize(g_params, 0);
    ParamStr(IND_PATH);
@@ -349,6 +386,9 @@ void BuildIndicatorParams()
    ParamInt(InpStatsMode);
    ParamInt(InpStatsPeriod);
    ParamInt(InpStatsCorner);
+   ParamInt(InpTfStatsMode);
+   ParamInt(InpTfStatsDays);
+   ParamInt(InpTfStatsCorner);
    ParamInt(InpAdxMode);
    ParamInt(InpAdxCorner);
    ParamInt(InpMtfMode);
@@ -381,6 +421,8 @@ void BuildIndicatorParams()
    ParamDbl(InpAdxRangeLevel);
    ParamDbl(InpAdxStrongLevel);
    ParamDbl(InpNeutralZone);
+   ParamBool(draw); // InpDrawObjects
+   ParamInt(InpLogLevel);
   }
 
 //+------------------------------------------------------------------+
@@ -534,6 +576,8 @@ bool SplitVolume(const double total, double &vols[])
 // Market order; returns the position ticket (0 on failure).
 ulong SendMarket(const int side, const double vol, const double sl, const double tp, const string comment)
   {
+   Log(LOG_DETAIL, StringFormat("ส่งคำสั่ง %s %.2f lot SL %s TP %s (%s) Ask %s Bid %s", side > 0 ? "BUY" : "SELL", vol, Fmt(sl),
+                                tp > 0.0 ? Fmt(tp) : "ไม่ตั้ง", comment, Fmt(SymbolInfoDouble(_Symbol, SYMBOL_ASK)), Fmt(SymbolInfoDouble(_Symbol, SYMBOL_BID))));
    bool ok = side > 0 ? g_trade.Buy(vol, _Symbol, 0.0, sl, tp, comment)
                       : g_trade.Sell(vol, _Symbol, 0.0, sl, tp, comment);
    uint rc = g_trade.ResultRetcode();
@@ -543,6 +587,8 @@ ulong SendMarket(const int side, const double vol, const double sl, const double
       return 0;
      }
    ulong deal = g_trade.ResultDeal();
+   Log(LOG_NORMAL, StringFormat("คำสั่งสำเร็จ %s %.2f lot ราคา %s · deal #%I64u order #%I64u · รหัส %u", side > 0 ? "BUY" : "SELL",
+                                g_trade.ResultVolume(), Fmt(g_trade.ResultPrice()), deal, g_trade.ResultOrder(), rc));
    if(deal > 0 && HistoryDealSelect(deal))
      {
       long positionId = HistoryDealGetInteger(deal, DEAL_POSITION_ID);
@@ -679,7 +725,7 @@ void TryMoveSl(const ulong ticket, const bool isBuy, const double curSl, const d
       Notify(StringFormat("🛡 #%I64u %s: SL → %s", ticket, why, Fmt(newSl)), false);
    else
      {
-      Print("เลื่อน SL #", ticket, " ไม่สำเร็จ: ", RetcodeTh(g_trade.ResultRetcode()));
+      Log(LOG_ERRORS, StringFormat("❌ เลื่อน SL #%I64u ไม่สำเร็จ: %s", ticket, RetcodeTh(g_trade.ResultRetcode())));
       g_modifyBlockedUntil = TimeCurrent() + 10;
      }
   }
@@ -963,8 +1009,18 @@ string EaFilterReasons(const double sigEntry, const double sigSl)
 bool OnNewSignalBar(const datetime barOpen)
   {
    int bars = Bars(_Symbol, g_tf);
-   if(bars <= 2 || BarsCalculated(g_handle) < bars)
+   int calc = BarsCalculated(g_handle);
+   if(bars <= 2 || calc < bars)
+     {
+      if(g_waitSince == 0)
+         g_waitSince = TimeCurrent();
+      else
+         if((long)TimeCurrent() - (long)g_waitSince > 30)
+            LogOnce(LOG_NORMAL, "wait" + IntegerToString((long)barOpen),
+                    StringFormat("⚠ อินดิเคเตอร์ยังคำนวณแท่งใหม่ไม่เสร็จเกิน 30 วินาที (คำนวณแล้ว %d / มี %d แท่ง error %d)", calc, bars, GetLastError()));
       return false;
+     }
+   g_waitSince = 0;
    double sig[], dir[], st[], entry[], sl[], tp1[], tp2[], tp3[];
    datetime t[];
    ArraySetAsSeries(dir, true);
@@ -973,7 +1029,16 @@ bool OnNewSignalBar(const datetime barOpen)
       || CopyBuffer(g_handle, BUF_SL, 1, 1, sl) != 1 || CopyBuffer(g_handle, BUF_TP1, 1, 1, tp1) != 1
       || CopyBuffer(g_handle, BUF_TP2, 1, 1, tp2) != 1 || CopyBuffer(g_handle, BUF_TP3, 1, 1, tp3) != 1
       || CopyTime(_Symbol, g_tf, 1, 1, t) != 1)
+     {
+      LogOnce(LOG_NORMAL, "copy" + IntegerToString((long)barOpen), StringFormat("อ่านค่าจากอินดิเคเตอร์ไม่สำเร็จ error %d จะลองใหม่", GetLastError()));
       return false;
+     }
+   Log(LOG_DETAIL, StringFormat("แท่ง %s ปิด: ป้าย %s ทิศ %d→%d ST %s Entry %s SL %s TP %s/%s/%s สเปรด %s",
+                                TimeToString(t[0]), sig[0] > 0.5 ? "BUY" : sig[0] < -0.5 ? "SELL" : "-", (int)dir[1], (int)dir[0],
+                                st[0] == EMPTY_VALUE ? "-" : Fmt(st[0]), entry[0] == EMPTY_VALUE ? "-" : Fmt(entry[0]),
+                                sl[0] == EMPTY_VALUE ? "-" : Fmt(sl[0]), tp1[0] == EMPTY_VALUE ? "-" : Fmt(tp1[0]),
+                                tp2[0] == EMPTY_VALUE ? "-" : Fmt(tp2[0]), tp3[0] == EMPTY_VALUE ? "-" : Fmt(tp3[0]),
+                                Fmt(SymbolInfoDouble(_Symbol, SYMBOL_ASK) - SymbolInfoDouble(_Symbol, SYMBOL_BID))));
 
    g_lastDir = (int)dir[0];
    TrailSupertrend(g_lastDir, st[0]);
@@ -986,7 +1051,10 @@ bool OnNewSignalBar(const datetime barOpen)
    // Never act twice on the same candle (also after a terminal restart).
    string lastKey = GvPrefix() + "LAST";
    if(GlobalVariableCheck(lastKey) && (datetime)GlobalVariableGet(lastKey) >= t[0])
+     {
+      Log(LOG_DETAIL, "แท่งนี้ทำไปแล้ว (เปิด EA ใหม่) ข้าม");
       return true;
+     }
    GlobalVariableSet(lastKey, (double)t[0]);
 
    if(InpOppositeMode == OPPOSITE_ON_FLIP && flip != 0 && CountPositions(-flip) > 0)
@@ -1168,13 +1236,10 @@ void DrawPanel()
    TBegin(2);
    TCell("ST TP/SL EA v" + EA_VERSION, head);
    TCell(_Symbol, head);
-   TCell("เทรดที่ TF", fg, "EA เข้าออเดอร์ตามแท่งของ TF นี้ ไม่ว่ากราฟจะเปิด TF ไหน");
-   TCell(TfName(g_tf), fg);
-   if((ENUM_TIMEFRAMES)_Period != g_tf)
-     {
-      TCell("หมายเหตุ", down);
-      TCell("กราฟเป็น " + TfName(PERIOD_CURRENT) + " เปลี่ยนเป็น " + TfName(g_tf) + " เพื่อดูป้าย", down);
-     }
+   TCell("EA เทรดที่ TF", fg, "EA เข้าออเดอร์ตามแท่งของ TF นี้ ไม่ว่ากราฟจะเปิด TF ไหน");
+   TCell(TfName(g_tf), head);
+   TCell("กราฟแสดง TF", fg, "ป้ายและสถิติบนกราฟเป็นของ TF ที่กราฟเปิดอยู่ สลับดูได้ EA ยังเทรด TF เดิม");
+   TCell(TfName(PERIOD_CURRENT) + ((ENUM_TIMEFRAMES)_Period == g_tf ? " (ป้ายตรงกับที่ EA เข้า)" : " (ดูอย่างเดียว)"), fg);
    TCell("เทรนด์", fg);
    TCell(DirText(g_lastDir), g_lastDir < 0 ? up : g_lastDir > 0 ? down : fg);
    TCell("ออเดอร์ของ EA", fg, "ไม่นับออเดอร์ที่เปิดเองด้วยมือ (แยกด้วย Magic number)");
@@ -1385,6 +1450,55 @@ void RefreshScreen()
   }
 
 //+------------------------------------------------------------------+
+//| System report at start (copy it when asking for help)            |
+//+------------------------------------------------------------------+
+string FillingText()
+  {
+   long f = SymbolInfoInteger(_Symbol, SYMBOL_FILLING_MODE);
+   string s = "";
+   if((f & SYMBOL_FILLING_FOK) != 0)
+      s += "FOK ";
+   if((f & SYMBOL_FILLING_IOC) != 0)
+      s += "IOC ";
+   return s == "" ? "RETURN" : s;
+  }
+
+void LogSystemReport()
+  {
+   Log(LOG_NORMAL, "===== รายงานตรวจระบบ v" + EA_VERSION + " =====");
+   Log(LOG_NORMAL, StringFormat("บัญชี %s · %s · เลเวอเรจ 1:%d · บาลานซ์ %.2f %s · เซิร์ฟเวอร์ %s · MT5 build %d",
+                                g_netting ? "Netting" : "Hedging", AccountInfoInteger(ACCOUNT_TRADE_MODE) == ACCOUNT_TRADE_MODE_DEMO ? "Demo" : "จริง/อื่น",
+                                (int)AccountInfoInteger(ACCOUNT_LEVERAGE), AccountInfoDouble(ACCOUNT_BALANCE), AccountInfoString(ACCOUNT_CURRENCY),
+                                AccountInfoString(ACCOUNT_SERVER), (int)TerminalInfoInteger(TERMINAL_BUILD)));
+   Log(LOG_NORMAL, StringFormat("คู่ %s · ทศนิยม %d · point %s · tick %s มูลค่า tick %.5f · contract %.2f · ล็อต %.2f–%.2f ขั้น %.2f",
+                                _Symbol, _Digits, DoubleToString(_Point, _Digits), DoubleToString(SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_SIZE), _Digits),
+                                SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_VALUE), SymbolInfoDouble(_Symbol, SYMBOL_TRADE_CONTRACT_SIZE),
+                                SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MIN), SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MAX), SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_STEP)));
+   Log(LOG_NORMAL, StringFormat("ระยะ SL ขั้นต่ำ %d points · freeze %d points · filling %s · สเปรดตอนนี้ %d points · โหมดเทรดของคู่ %d",
+                                (int)SymbolInfoInteger(_Symbol, SYMBOL_TRADE_STOPS_LEVEL), (int)SymbolInfoInteger(_Symbol, SYMBOL_TRADE_FREEZE_LEVEL),
+                                FillingText(), (int)SymbolInfoInteger(_Symbol, SYMBOL_SPREAD), (int)SymbolInfoInteger(_Symbol, SYMBOL_TRADE_MODE)));
+   Log(LOG_NORMAL, StringFormat("EA เทรด %s · กราฟ %s · Magic %I64u · Algo Trading: เทอร์มินัล %s / EA %s · อินดิเคเตอร์: ตัวเทรด %s ตัวแสดงผล %s",
+                                TfName(g_tf), TfName(PERIOD_CURRENT), g_magic,
+                                TerminalInfoInteger(TERMINAL_TRADE_ALLOWED) ? "เปิด" : "ปิด", MQLInfoInteger(MQL_TRADE_ALLOWED) ? "เปิด" : "ปิด",
+                                g_handle != INVALID_HANDLE ? "พร้อม" : "ไม่ได้", g_indAdded ? "อยู่บนกราฟ" : "ไม่แสดง"));
+   Log(LOG_NORMAL, StringFormat("ล็อต: %s · แบ่ง TP %.0f/%.0f/%.0f%% · ป้ายตรงข้าม: %s · กันทุน %s · SL→TP1 %s · Trailing %s%s",
+                                LotText(), InpPart1Pct, InpPart2Pct, InpPart3Pct, EnumToString(InpOppositeMode),
+                                InpBeAfterTp1 ? "เปิด" : "ปิด", InpSlToTp1AfterTp2 ? "เปิด" : "ปิด", InpTrailSupertrend ? "เปิด" : "ปิด",
+                                InpTrailSupertrend && InpTrailNoTp3 ? " (ไม่ตั้ง TP3)" : ""));
+   Log(LOG_NORMAL, StringFormat("ตัวกรอง EA: สเปรด %s · ช่วงเวลา %s · ขาดทุน/วัน %s · เทรด/วัน %s · พักหลัง SL %s · ข่าว %s",
+                                InpUseSpreadFilter ? DoubleToString(InpMaxSpreadPctOfSl, 1) + "%" : "ปิด",
+                                InpUseTradeHours ? InpTradeHours : "ปิด",
+                                InpUseDailyLossLimit ? DoubleToString(InpDailyLossValue, 2) + (InpDailyLossType == LOSS_PERCENT ? "%" : " " + AccountInfoString(ACCOUNT_CURRENCY)) : "ปิด",
+                                InpUseMaxTradesDay ? IntegerToString(InpMaxTradesPerDay) : "ปิด",
+                                InpUseCooldown ? IntegerToString(InpCooldownBars) + " แท่ง" : "ปิด",
+                                InpUseNewsFilter ? (MQLInfoInteger(MQL_TESTER) ? "เปิด (ใช้ไม่ได้ใน backtest)" : "เปิด") : "ปิด"));
+   int positions = CountPositions(1) + CountPositions(-1);
+   if(positions > 0)
+      Log(LOG_NORMAL, StringFormat("พบออเดอร์ของ EA นี้ค้างอยู่ %d ออเดอร์ จะดูแลต่อ", positions));
+   Log(LOG_NORMAL, "===== จบรายงาน =====");
+  }
+
+//+------------------------------------------------------------------+
 //| Expert events                                                    |
 //+------------------------------------------------------------------+
 int OnInit()
@@ -1393,13 +1507,13 @@ int OnInit()
       || InpAdxLength < 1 || InpAdxSmoothing < 1 || InpPivotLength < 1 || InpKeyLevelsCount < 1
       || InpRiskPercent <= 0.0 || InpFixedLots <= 0.0)
      {
-      Print("ST TP/SL EA: ค่าที่ตั้งไม่ถูกต้อง (ต้องมากกว่า 0)");
+      Print("[ST67][EA] ค่าที่ตั้งไม่ถูกต้อง (ต้องมากกว่า 0)");
       return INIT_PARAMETERS_INCORRECT;
      }
    int hFrom, hTo;
    if(InpUseTradeHours && !ParseHours(hFrom, hTo))
      {
-      Print("ST TP/SL EA: รูปแบบช่วงเวลาไม่ถูกต้อง ต้องเป็น HH:MM-HH:MM เช่น 08:00-22:00");
+      Print("[ST67][EA] รูปแบบช่วงเวลาไม่ถูกต้อง ต้องเป็น HH:MM-HH:MM เช่น 08:00-22:00");
       return INIT_PARAMETERS_INCORRECT;
      }
    g_tf = InpTradeTf == PERIOD_CURRENT ? (ENUM_TIMEFRAMES)_Period : InpTradeTf;
@@ -1410,22 +1524,43 @@ int OnInit()
    g_trade.SetTypeFillingBySymbol(_Symbol);
    g_netting = (ENUM_ACCOUNT_MARGIN_MODE)AccountInfoInteger(ACCOUNT_MARGIN_MODE) != ACCOUNT_MARGIN_MODE_RETAIL_HEDGING;
 
-   BuildIndicatorParams();
+   bool sameTf = (ENUM_TIMEFRAMES)_Period == g_tf;
+   //--- Trade instance: draws only when it is also the one shown on this chart.
+   BuildIndicatorParams(InpShowIndicator && sameTf);
    g_handle = IndicatorCreate(_Symbol, g_tf, IND_CUSTOM, ArraySize(g_params), g_params);
    if(g_handle == INVALID_HANDLE)
      {
-      Print("ST TP/SL EA: โหลดอินดิเคเตอร์ไม่ได้ (", GetLastError(), ") ให้ compile Indicators\\ST_TP_SL.mq5 ก่อน แล้ว compile EA ใหม่");
+      Log(LOG_ERRORS, StringFormat("❌ โหลดอินดิเคเตอร์ไม่ได้ (error %d) ให้ compile Indicators\\ST_TP_SL.mq5 ก่อน แล้ว compile EA ใหม่", GetLastError()));
       return INIT_FAILED;
      }
+   g_dispHandle = INVALID_HANDLE;
    g_indAdded = false;
-   if(InpShowIndicator && (ENUM_TIMEFRAMES)_Period == g_tf && ChartIndicatorAdd(0, 0, g_handle))
+   if(InpShowIndicator)
      {
-      g_indAdded = true;
-      g_indName = ChartIndicatorName(0, 0, ChartIndicatorsTotal(0, 0) - 1);
+      if(sameTf)
+         g_dispHandle = g_handle;
+      else
+        {
+         BuildIndicatorParams(true);
+         g_dispHandle = IndicatorCreate(_Symbol, (ENUM_TIMEFRAMES)_Period, IND_CUSTOM, ArraySize(g_params), g_params);
+         if(g_dispHandle == INVALID_HANDLE)
+            Log(LOG_ERRORS, StringFormat("❌ สร้างอินดิเคเตอร์สำหรับแสดงผลบน %s ไม่ได้ error %d (EA ยังเทรดได้ตามปกติ)", TfName(PERIOD_CURRENT), GetLastError()));
+        }
+      if(g_dispHandle != INVALID_HANDLE)
+        {
+         if(ChartIndicatorAdd(0, 0, g_dispHandle))
+           {
+            g_indAdded = true;
+            g_indName = ChartIndicatorName(0, 0, ChartIndicatorsTotal(0, 0) - 1);
+           }
+         else
+            Log(LOG_ERRORS, StringFormat("❌ ใส่อินดิเคเตอร์ลงกราฟไม่สำเร็จ error %d (EA ยังเทรดได้ตามปกติ)", GetLastError()));
+        }
      }
    g_lastBarTime = 0;
-   Notify(StringFormat("▶ EA v%s เริ่มทำงาน %s เทรดที่ %s · Magic %I64u · %s", EA_VERSION, _Symbol, TfName(g_tf), g_magic,
-                       g_netting ? "Netting" : "Hedging"), false);
+   LogSystemReport();
+   Notify(StringFormat("▶ EA v%s เริ่มทำงาน %s เทรดที่ %s · กราฟแสดง %s · Magic %I64u · %s", EA_VERSION, _Symbol, TfName(g_tf),
+                       TfName(PERIOD_CURRENT), g_magic, g_netting ? "Netting" : "Hedging"), false);
    EventSetTimer(5);
    RefreshScreen();
    return INIT_SUCCEEDED;
@@ -1436,6 +1571,8 @@ void OnDeinit(const int reason)
    EventKillTimer();
    if(g_indAdded && g_indName != "")
       ChartIndicatorDelete(0, 0, g_indName);
+   if(g_dispHandle != INVALID_HANDLE && g_dispHandle != g_handle)
+      IndicatorRelease(g_dispHandle);
    if(g_handle != INVALID_HANDLE)
       IndicatorRelease(g_handle);
    ObjectsDeleteAll(0, g_objPrefix);
