@@ -35,6 +35,7 @@ showBreakoutSignalsInput = input.bool(false, "Show trendline/channel breakout si
 enableTp3ReentryInput = input.bool(false, "Enable Supertrend re-entry", tooltip = "After TP3, looks for a pullback to the Supertrend followed by confirmation in the trend direction.", group = DISPLAY_GROUP)
 enableEmaReentryInput = input.bool(false, "Enable EMA re-entry", tooltip = "After TP3, looks for a pullback across the EMA and a recross in the trend direction.", group = DISPLAY_GROUP)
 enableAggressiveEmaReentryInput = input.bool(false, "Enable aggressive EMA re-entry", tooltip = "After TP3, allows re-entry on an EMA touch and close back in the trend direction without waiting for a prior close across the EMA.", group = DISPLAY_GROUP)
+confirmedSignalsOnlyInput = input.bool(true, "Signals only on closed candles", tooltip = "Waits for the candle to close before showing BUY/SELL and setting Entry/SL/TP, so signals never move or disappear (same as the signal bot). Turn off to see signals form on the live candle.", group = DISPLAY_GROUP)
 emaReentryLengthInput = input.int(13, "Re-entry EMA length", options = [13, 9, 5], tooltip = "EMA length used for optional pullback re-entry after TP3.", group = CALCULATION_GROUP)
 pivotLengthInput = input.int(5, "Pivot length", minval = 1, maxval = 50, tooltip = "Number of bars to the left and right required to confirm a swing high or swing low.", group = CALCULATION_GROUP)
 keyLevelsCountInput = input.int(3, "Number of key levels", minval = 1, maxval = 5, tooltip = "Maximum number of support and resistance levels on each side.", group = CALCULATION_GROUP)
@@ -195,8 +196,9 @@ bool unfilteredSellSignal = supertrendSellSignal or breakoutSellSignal or reentr
 bool adxSignalFilterPassed = not onlyStrongAdxSignalsInput or (not na(adxValue) and adxValue > signalAdxThresholdInput)
 bool ema200LongAllowed = not useEma200FilterInput or close > ema200Value
 bool ema200ShortAllowed = not useEma200FilterInput or close < ema200Value
-bool buySignal = (unfilteredBuySignal or aggressiveEmaReentryBuySignal) and adxSignalFilterPassed and ema200LongAllowed
-bool sellSignal = (unfilteredSellSignal or aggressiveEmaReentrySellSignal) and adxSignalFilterPassed and ema200ShortAllowed
+bool barConfirmedForSignal = not confirmedSignalsOnlyInput or barstate.isconfirmed
+bool buySignal = (unfilteredBuySignal or aggressiveEmaReentryBuySignal) and adxSignalFilterPassed and ema200LongAllowed and barConfirmedForSignal
+bool sellSignal = (unfilteredSellSignal or aggressiveEmaReentrySellSignal) and adxSignalFilterPassed and ema200ShortAllowed and barConfirmedForSignal
 if enableEmaReentryInput and reentryLongArmed and isUpTrend and emaCrossDown
     emaLongPullbackArmed := true
 if enableEmaReentryInput and reentryShortArmed and isDownTrend and emaCrossUp
