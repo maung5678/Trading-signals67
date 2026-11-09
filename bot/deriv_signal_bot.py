@@ -35,6 +35,7 @@ except ImportError:  # pragma: no cover
 HERE = os.path.dirname(os.path.abspath(__file__))
 CONFIG_PATH = os.path.join(HERE, "config.json")
 STATE_PATH = os.path.join(HERE, "state.json")
+LOG_PATH = os.path.join(HERE, "log.json")  # recent notifications, shown in the dashboard
 
 # Deriv candle granularities, in minutes.
 TIMEFRAMES = [1, 2, 3, 5, 10, 15, 30, 60, 120, 240, 480, 1440]
@@ -84,6 +85,7 @@ DEFAULT_CONFIG = {
         "tpsl_sound": "system",
         "sound_file": "",
         "tts_lang": "th",  # th | en
+        "telegram": False,
         "telegram_bot_token": "",
         "telegram_chat_id": "",
     },
@@ -364,16 +366,19 @@ def normalize_config(raw):
     for k in ("watchlist", "symbols", "timeframes_minutes", "deriv_ws_url"):
         raw.pop(k, None)
     raw["notify"] = _merge(legacy_notify, raw.get("notify", {}))
+    if "telegram" not in raw["notify"]:  # older configs: on when both fields were filled in
+        raw["notify"]["telegram"] = bool(raw["notify"].get("telegram_bot_token") and raw["notify"].get("telegram_chat_id"))
     raw["strategy"] = _merge(legacy_strategy, raw.get("strategy", {}))
 
     cfg = _merge(DEFAULT_CONFIG, {k: v for k, v in raw.items() if k != "assets"})
     if "assets" in raw:
         cfg["assets"] = raw["assets"]
 
-    assets, seen = [], set()
+    assets, seen, dropped = [], set(), []
     for a in cfg["assets"]:
         sym = str(a.get("symbol", "")).strip()
         if not re.fullmatch(r"[A-Za-z0-9_]{2,30}", sym) or sym in seen:
+            dropped.append(sym)
             continue
         seen.add(sym)
         tfs = sorted({int(t) for t in a.get("timeframes", []) if int(t) in TIMEFRAMES})
@@ -386,6 +391,8 @@ def normalize_config(raw):
             "alerts": _merge(DEFAULT_ALERTS, {k: bool(v) for k, v in (a.get("alerts") or {}).items() if k in DEFAULT_ALERTS}),
         })
     cfg["assets"] = assets
+    if dropped:
+        print("Ignored invalid or duplicate symbols: %s" % ", ".join(dropped), flush=True)
 
     s = cfg["strategy"]
     s["supertrend_factor"] = min(max(float(s["supertrend_factor"]), 0.1), 20.0)
@@ -410,6 +417,11 @@ def normalize_config(raw):
         n["tts_lang"] = "th"
     n["led_color"] = re.sub(r"[^0-9a-fA-F]", "", str(n["led_color"]))[:6] or "00ff00"
     n["vibrate"] = re.sub(r"[^0-9,]", "", str(n["vibrate"]))[:40]
+    n["telegram"] = bool(n.get("telegram"))
+    for k in ("telegram_bot_token", "telegram_chat_id", "sound_file"):
+        n[k] = str(n.get(k) or "").strip()
+    for k in DEFAULT_CONFIG["notify"]["fields"]:
+        n["fields"][k] = bool(n["fields"].get(k))
     cfg["poll_seconds"] = min(max(int(cfg["poll_seconds"]), 5), 300)
     cfg.pop("stats_candles", None)
     cfg["stats_days"] = min(max(int(cfg.get("stats_days", 7)), 1), 60)
@@ -447,6 +459,11 @@ class Shared:
         self.status = {}
         self.log = []
         self.started = time.time()
+        try:
+            with open(LOG_PATH, encoding="utf-8") as f:
+                self.log = json.load(f)[:50]
+        except Exception:
+            pass
 
     def get_cfg(self):
         with self.lock:
@@ -466,6 +483,26 @@ class Shared:
         with self.lock:
             self.log.insert(0, {"time": time.time(), "title": title, "body": body})
             del self.log[50:]
+            self._save_log()
+
+    def clear_log(self):
+        with self.lock:
+            self.log = []
+            self._save_log()
+
+    def _save_log(self):
+        try:
+            with open(LOG_PATH, "w", encoding="utf-8") as f:
+                json.dump(self.log, f, ensure_ascii=False)
+        except OSError:
+            pass
+
+    def prune(self, keys):
+        """Forget status of charts that were removed or switched off."""
+        with self.lock:
+            for k in list(self.status):
+                if k not in keys:
+                    del self.status[k]
 
 
 # ---------------------------------------------------------------------------
@@ -658,7 +695,7 @@ def notify(cfg, title, body, sound_mode="system", speech="", group="signals", sh
     print("\n=== %s ===\n%s\n" % (title, body), flush=True)
     if shared is not None:
         shared.add_log(title, body)
-    if n.get("telegram_bot_token") and n.get("telegram_chat_id"):
+    if n.get("telegram") and n.get("telegram_bot_token") and n.get("telegram_chat_id"):
         try:
             data = urllib.parse.urlencode({"chat_id": n["telegram_chat_id"], "text": title + "\n" + body}).encode()
             url = "https://api.telegram.org/bot%s/sendMessage" % n["telegram_bot_token"]
@@ -773,6 +810,18 @@ def update_stats(deriv, cfg, asset, tf, candles, shared, cache):
     shared.set_status(key, stats=res)
 
 
+def publish_trade(shared, key, st, cfg):
+    """Show the tracked trade (entry / SL / TPs, which TPs were hit) on the dashboard."""
+    t = st.get("trade")
+    if shared is None or not t:
+        return
+    dg = t.get("digits")
+    shared.set_status(key, trade={
+        "side": t["side"], "entry": fmt(t["entry"], dg), "sl": fmt(t["sl"], dg),
+        "tps": [fmt(x, dg) for x in t["tps"]], "tp_hit": t["tp_hit"], "closed": t["closed"],
+        "time": fmt_time(t["epoch"], cfg)})
+
+
 def process(deriv, cfg, state, asset, tf, shared=None, cache=None):
     cache = {} if cache is None else cache
     symbol = asset["symbol"]
@@ -804,6 +853,7 @@ def process(deriv, cfg, state, asset, tf, shared=None, cache=None):
             print("%s %s: stats error %s" % (time.strftime("%H:%M:%S"), key, exc), flush=True)
     st = state.setdefault(key, {"last_epoch": 0, "trade": None})
     if candles[-1]["epoch"] <= st["last_epoch"]:
+        publish_trade(shared, key, st, cfg)  # e.g. right after a restart
         return  # no new closed candle yet
     first_run = st["last_epoch"] == 0
 
@@ -813,13 +863,14 @@ def process(deriv, cfg, state, asset, tf, shared=None, cache=None):
             continue
         side = signal_at(direction, i)
         prev = st["trade"]
-        events = []
+        # Check the open trade FIRST, also on a candle that flips the signal,
+        # so an SL/TP hit on the reversal candle is never skipped.
+        # On the first run this replays history silently, so old trades show their real state.
+        events = update_trade(prev, candle)
         if not first_run:
-            # Check the open trade FIRST, also on a candle that flips the signal,
-            # so an SL/TP hit on the reversal candle is never skipped.
-            events = update_trade(prev, candle)
             for ev in events:
-                if alerts.get("sl" if ev.startswith("SL") else ev.lower()):
+                # TP/SL alerts follow the BUY/SELL switch: without the entry alert they make no sense.
+                if alerts["signal"] and alerts.get("sl" if ev.startswith("SL") else ev.lower()):
                     title, body = event_message(asset, tf, prev, ev, cfg, candle["epoch"])
                     notify(cfg, title, body, n["tpsl_sound"], speech_text(asset, tf, ev, cfg), symbol, shared)
         if side:
@@ -832,6 +883,8 @@ def process(deriv, cfg, state, asset, tf, shared=None, cache=None):
                     shared.set_status(key, filtered=msg)
                 continue
             st["trade"] = make_trade(side, candle, atr[i], strategy, digits)
+            if shared is not None:
+                shared.set_status(key, filtered="")
             if not first_run and alerts["signal"]:
                 title, body = signal_message(asset, tf, st["trade"], cfg, late=i < len(candles) - 1)
                 note = previous_trade_note(prev, events, candle["close"])
@@ -839,11 +892,7 @@ def process(deriv, cfg, state, asset, tf, shared=None, cache=None):
                     body += "\n" + note
                 notify(cfg, title, body, n["signal_sound"], speech_text(asset, tf, side, cfg), symbol, shared)
     st["last_epoch"] = candles[-1]["epoch"]
-    if shared is not None and st.get("trade"):
-        t = st["trade"]
-        shared.set_status(key, trade="%s%s @ %s, SL %s, TP %s" % (
-            side_words(t["side"])[0], " (จบแล้ว)" if t["closed"] else "", fmt(t["entry"], t.get("digits")),
-            fmt(t["sl"], t.get("digits")), " / ".join(fmt(x, t.get("digits")) for x in t["tps"])))
+    publish_trade(shared, key, st, cfg)
 
 
 def run_loop(shared):
@@ -853,6 +902,11 @@ def run_loop(shared):
     backoff = 5
     while True:
         cfg = shared.get_cfg()
+        keys = {"%s_%d" % (a["symbol"], tf) for a, tf in watch_pairs(cfg)}
+        shared.prune(keys)
+        for k in list(STATS_CACHE):
+            if k not in keys:
+                del STATS_CACHE[k]
         cache = {}  # higher-timeframe candles, fetched at most once per round
         try:
             for asset, tf in watch_pairs(cfg):
@@ -911,21 +965,27 @@ def make_handler(shared):
 
         def do_POST(self):
             path = self.path.split("?")[0]
+            if path == "/api/log/clear":
+                shared.clear_log()
+                self._send(200, {"ok": True})
+                return
             try:
                 cfg = normalize_config(self._body())
             except Exception as exc:
                 self._send(400, {"error": "invalid settings: %s" % exc})
                 return
-            asset = cfg["assets"][0] if cfg["assets"] else {"symbol": "cryBTCUSD", "label": "BTCUSD"}
+            enabled = [a for a in cfg["assets"] if a["enabled"]] or cfg["assets"]
+            asset = enabled[0] if enabled else {"symbol": "cryBTCUSD", "label": "BTCUSD", "timeframes": [1]}
             tf = (asset.get("timeframes") or [1])[0]
             trade = sample_trade(cfg)
             sig = signal_message(asset, tf, trade, cfg)
             tp = event_message(asset, tf, trade, "TP1", cfg, trade["epoch"] + tf * 60)
+            sl = event_message(asset, tf, trade, "SL", cfg, trade["epoch"] + 2 * tf * 60)
             if path == "/api/config":
                 shared.set_cfg(cfg)
                 self._send(200, {"ok": True, "config": cfg})
             elif path == "/api/preview":
-                self._send(200, {"signal": sig, "tp": tp})
+                self._send(200, {"signal": sig, "tp": tp, "sl": sl})
             elif path == "/api/test":
                 n = cfg["notify"]
                 notify(cfg, "🧪 ทดสอบ " + sig[0], sig[1], n["signal_sound"],
@@ -946,194 +1006,339 @@ def start_dashboard(shared):
 
 DASHBOARD_HTML = r"""<!doctype html>
 <html lang="th"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Signal Bot Settings</title>
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Signal Bot</title>
 <style>
-:root{--bg:#0f1115;--card:#181b22;--line:#2a2f3a;--fg:#e8eaed;--mut:#9aa0aa;--acc:#3b82f6;--up:#16a34a;--dn:#dc2626}
-@media (prefers-color-scheme: light){:root{--bg:#f4f5f7;--card:#fff;--line:#dfe2e7;--fg:#15171a;--mut:#5f6670}}
-*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--fg);font:15px/1.45 system-ui,-apple-system,sans-serif;padding:0 14px 90px}
-h1{font-size:20px;margin:16px 0 4px}h2{font-size:16px;margin:0 0 10px}
-.mut{color:var(--mut);font-size:13px}.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:14px;margin:12px 0}
-.row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}.between{justify-content:space-between}
-label.t{display:inline-flex;gap:6px;align-items:center;margin:4px 12px 4px 0}
-input[type=text],input[type=number],input[type=password],select{background:var(--bg);color:var(--fg);border:1px solid var(--line);border-radius:8px;padding:8px;font:inherit;min-width:0}
-input[type=number]{width:80px}.grow{flex:1}
-.chip{border:1px solid var(--line);background:var(--bg);color:var(--fg);border-radius:999px;padding:6px 11px;font:inherit;font-size:14px}
-.chip.on{background:var(--acc);border-color:var(--acc);color:#fff}
-button{cursor:pointer}.btn{border:0;border-radius:10px;padding:11px 16px;font:inherit;font-weight:600;background:var(--acc);color:#fff}
-.btn.sec{background:var(--line);color:var(--fg)}.btn.del{background:transparent;color:var(--dn);border:1px solid var(--dn);padding:6px 10px}
-.asset{border-top:1px solid var(--line);padding:12px 0}.asset:first-of-type{border-top:0}
-.sym{font-weight:700}.code{font-family:ui-monospace,monospace;font-size:12px;color:var(--mut)}
-.prev{background:var(--bg);border:1px solid var(--line);border-radius:10px;padding:10px;white-space:pre-wrap;font-size:14px;margin-top:8px}
-.prev b{display:block;margin-bottom:4px}
-.bar{position:fixed;left:0;right:0;bottom:0;background:var(--card);border-top:1px solid var(--line);padding:10px 14px;display:flex;gap:8px}
-.bar .btn{flex:1}.ok{color:var(--up)}.err{color:var(--dn)}
-table{width:100%;border-collapse:collapse;font-size:13px}td,th{text-align:left;padding:5px 4px;border-bottom:1px solid var(--line);vertical-align:top}
-.UP{color:var(--up);font-weight:600}
-.sgrid{display:grid;grid-template-columns:repeat(3,1fr);gap:6px;margin:6px 0}.sgrid div{background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:6px;text-align:center}
-.sgrid b{display:block;font-size:17px;color:var(--fg)}.st{border-top:1px solid var(--line);padding:10px 0}.st:first-child{border-top:0;padding-top:0}
-.pos{color:var(--up)!important}.neg{color:var(--dn)!important}.DOWN{color:var(--dn);font-weight:600}
-details summary{cursor:pointer;font-weight:600}
+:root{--bg:#0e1014;--card:#171a21;--card2:#1e222b;--line:#2a2f3a;--fg:#e8eaed;--mut:#98a0ab;--acc:#3b82f6;--acc2:#1d4ed8;--up:#22c55e;--dn:#ef4444;--warn:#f59e0b;--r:14px}
+@media (prefers-color-scheme: light){:root{--bg:#f3f4f6;--card:#fff;--card2:#f6f7f9;--line:#e1e4e8;--fg:#14171a;--mut:#5f6670;--up:#15803d;--dn:#dc2626;--warn:#b45309}}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+html,body{background:var(--bg)}
+body{margin:0;color:var(--fg);font:15px/1.45 system-ui,-apple-system,"Noto Sans Thai",sans-serif;padding-bottom:110px}
+.wrap{max-width:640px;margin:0 auto;padding:0 14px}
+header{padding:14px 0 6px;display:flex;align-items:center;justify-content:space-between;gap:10px}
+header h1{font-size:19px;margin:0}
+.live{font-size:12.5px;color:var(--mut);display:flex;align-items:center;gap:6px}
+.dot{width:9px;height:9px;border-radius:50%;background:var(--mut)}.dot.ok{background:var(--up);box-shadow:0 0 0 3px color-mix(in srgb,var(--up) 25%,transparent)}.dot.bad{background:var(--dn)}
+nav{position:sticky;top:0;z-index:5;background:var(--bg);display:grid;grid-template-columns:repeat(5,1fr);gap:4px;padding:8px 0}
+nav::-webkit-scrollbar{display:none}
+nav button{border:1px solid var(--line);background:var(--card);color:var(--mut);border-radius:12px;padding:6px 2px;font:inherit;font-size:12px;white-space:nowrap;display:flex;flex-direction:column;align-items:center;gap:1px}nav button span{font-size:18px;line-height:1.2}
+nav button.on{background:var(--acc);border-color:var(--acc);color:#fff;font-weight:600}
+section{display:none}section.on{display:block}
+.card{background:var(--card);border:1px solid var(--line);border-radius:var(--r);padding:14px;margin:10px 0}
+.card h2{font-size:15.5px;margin:0 0 4px}.hint{color:var(--mut);font-size:13px;margin:0 0 10px}
+.mut{color:var(--mut)}.small{font-size:12.5px}
+.row{display:flex;align-items:center;gap:10px;flex-wrap:wrap}.between{justify-content:space-between}.grow{flex:1;min-width:0}
+.field{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:10px 0;border-top:1px solid var(--line)}
+.field:first-of-type{border-top:0}.field>span:first-child{flex:1}.field .sub{display:block;color:var(--mut);font-size:12.5px}
+input[type=text],input[type=number],input[type=password],select{background:var(--card2);color:var(--fg);border:1px solid var(--line);border-radius:10px;padding:9px 10px;font:inherit;min-width:0}
+input:focus,select:focus{outline:2px solid var(--acc);outline-offset:0}
+input[type=number]{width:86px;text-align:right}input:disabled,select:disabled{opacity:.45}
+input[type=color]{width:44px;height:36px;border:1px solid var(--line);border-radius:10px;background:var(--card2);padding:2px}
+button{font:inherit;cursor:pointer;transition:transform .08s,opacity .15s,background .15s}
+button:active{transform:scale(.96)}button:disabled{opacity:.5;cursor:default;transform:none}
+.btn{border:0;border-radius:12px;padding:11px 16px;font-weight:600;background:var(--acc);color:#fff}
+.btn.sec{background:var(--card2);color:var(--fg);border:1px solid var(--line)}
+.btn.danger{background:transparent;color:var(--dn);border:1px solid var(--dn)}
+.btn.sm{padding:7px 12px;font-size:14px;border-radius:10px}
+/* switch */
+.sw{position:relative;width:46px;height:28px;flex:0 0 auto}.sw input{opacity:0;width:0;height:0;position:absolute}
+.sw i{position:absolute;inset:0;background:var(--line);border-radius:999px;transition:.2s}
+.sw i:after{content:"";position:absolute;width:22px;height:22px;left:3px;top:3px;background:#fff;border-radius:50%;transition:.2s;box-shadow:0 1px 3px #0005}
+.sw input:checked+i{background:var(--acc)}.sw input:checked+i:after{transform:translateX(18px)}
+.sw input:disabled+i{opacity:.4}
+/* chips / toggles */
+.chips{display:flex;flex-wrap:wrap;gap:6px}
+.chip{border:1px solid var(--line);background:var(--card2);color:var(--fg);border-radius:999px;padding:6px 12px;font-size:14px}
+.chip.on{background:var(--acc);border-color:var(--acc);color:#fff;font-weight:600}
+.chip.on:before{content:"✓ "}
+.chip:disabled{opacity:.35}
+.seg{display:flex;background:var(--card2);border:1px solid var(--line);border-radius:12px;padding:3px;gap:3px}
+.seg button{flex:1;border:0;background:transparent;color:var(--mut);border-radius:9px;padding:8px 6px;font-size:14px}
+.seg button.on{background:var(--acc);color:#fff;font-weight:600}
+/* overview */
+.chart{background:var(--card);border:1px solid var(--line);border-radius:var(--r);padding:12px 14px;margin:10px 0}
+.chart .top{display:flex;justify-content:space-between;align-items:baseline;gap:8px}
+.chart .name{font-weight:700;font-size:16px}.tf{color:var(--mut);font-weight:600;margin-left:4px}
+.pill{display:inline-block;border-radius:999px;padding:2px 10px;font-weight:700;font-size:13px}
+.pill.UP{background:color-mix(in srgb,var(--up) 18%,transparent);color:var(--up)}
+.pill.DOWN{background:color-mix(in srgb,var(--dn) 18%,transparent);color:var(--dn)}
+.kv{display:flex;gap:14px;flex-wrap:wrap;margin-top:6px;font-size:13.5px}.kv b{font-weight:600}
+.trade{margin-top:10px;background:var(--card2);border:1px solid var(--line);border-radius:12px;padding:10px}
+.trade .lv{display:grid;grid-template-columns:repeat(3,1fr);gap:6px;margin-top:6px}
+.lv div{font-size:13px}.lv b{display:block;font-size:14.5px;font-variant-numeric:tabular-nums}
+.lv .hit b{color:var(--up)}.lv .hit b:after{content:" ✓"}
+.side{font-weight:800}.side.LONG{color:var(--up)}.side.SHORT{color:var(--dn)}
+.note{margin-top:8px;font-size:13px;padding:7px 10px;border-radius:10px;background:var(--card2);border:1px solid var(--line)}
+.note.warn{border-color:color-mix(in srgb,var(--warn) 50%,transparent);color:var(--warn)}
+.note.err{border-color:color-mix(in srgb,var(--dn) 50%,transparent);color:var(--dn)}
+.log{border-top:1px solid var(--line);padding:10px 0;white-space:pre-wrap;font-size:13.5px}.log:first-child{border-top:0}
+.log b{display:block;font-size:14.5px}.log .t{color:var(--mut);font-size:12px}
+/* stats */
+.sgrid{display:grid;grid-template-columns:repeat(3,1fr);gap:6px;margin-top:8px}
+.sgrid div{background:var(--card2);border:1px solid var(--line);border-radius:10px;padding:7px 4px;text-align:center;font-size:12.5px;color:var(--mut)}
+.sgrid b{display:block;font-size:17px;color:var(--fg);font-variant-numeric:tabular-nums}
+.pos{color:var(--up)!important}.neg{color:var(--dn)!important}
+table{width:100%;border-collapse:collapse;font-size:13px;margin-top:8px}td,th{text-align:left;padding:6px 4px;border-bottom:1px solid var(--line)}th{color:var(--mut);font-weight:600}
+details>summary{cursor:pointer;list-style:none;color:var(--acc);font-size:14px;margin-top:8px}details>summary::-webkit-details-marker{display:none}
+details>summary:before{content:"▸ "}details[open]>summary:before{content:"▾ "}
+/* assets */
+.asset{background:var(--card);border:1px solid var(--line);border-radius:var(--r);margin:10px 0;overflow:hidden}
+.asset.off{opacity:.6}
+.ahead{display:flex;align-items:center;gap:12px;padding:12px 14px}
+.ahead .info{flex:1;min-width:0;cursor:pointer}.ahead .sum{color:var(--mut);font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ahead .chev{color:var(--mut);font-size:18px;cursor:pointer;padding:4px;transition:transform .2s}.asset.open .chev{transform:rotate(90deg)}
+.abody{display:none;padding:0 14px 14px;border-top:1px solid var(--line)}.asset.open .abody{display:block}
+.lbl{font-size:13px;color:var(--mut);margin:12px 0 6px;font-weight:600}
+/* save bar + toast */
+.bar{position:fixed;left:0;right:0;bottom:0;z-index:10;background:var(--card);border-top:1px solid var(--line);padding:10px 14px calc(10px + env(safe-area-inset-bottom));transform:translateY(110%);transition:transform .25s}
+.bar{visibility:hidden}.bar.show{transform:none;visibility:visible}.bar .wrap{display:flex;gap:8px;align-items:center;padding:0}
+.bar .msg{flex:1;font-size:13.5px;color:var(--warn);font-weight:600}
+.toast{position:fixed;left:50%;top:14px;transform:translate(-50%,-150%);z-index:20;background:var(--fg);color:var(--bg);padding:10px 16px;border-radius:12px;font-weight:600;font-size:14px;transition:transform .25s;max-width:90vw;text-align:center}
+.toast.show{transform:translate(-50%,0)}.toast.err{background:var(--dn);color:#fff}
+.prev{background:var(--card2);border:1px solid var(--line);border-radius:12px;padding:10px;white-space:pre-wrap;font-size:13.5px;margin-top:8px}
+.prev b{display:block}
+.empty{color:var(--mut);text-align:center;padding:22px 8px}
 </style></head><body>
-<h1>⚙️ Signal Bot</h1>
-<div class="mut" id="msg">กำลังโหลด…</div>
+<div class="wrap">
+<header><h1>📡 Signal Bot</h1><div class="live"><span class="dot" id="dot"></span><span id="live">กำลังเชื่อมต่อ…</span></div></header>
+<nav id="tabs">
+<button data-tab="ov"><span>📊</span>ภาพรวม</button><button data-tab="st"><span>🏆</span>สถิติ</button><button data-tab="as"><span>📈</span>สินทรัพย์</button><button data-tab="nt"><span>🔔</span>แจ้งเตือน</button><button data-tab="ad"><span>⚙️</span>ขั้นสูง</button>
+</nav>
 
-<div class="card"><h2>📊 สถานะ</h2><div id="status" class="mut">-</div>
-<details style="margin-top:10px"><summary>แจ้งเตือนล่าสุด</summary><div id="log" class="mut"></div></details></div>
+<section id="ov">
+<div id="charts"></div>
+<div class="card"><div class="row between"><h2>🕑 แจ้งเตือนล่าสุด</h2><button class="btn sec sm" id="clearLog">ล้าง</button></div>
+<div id="log"></div></div>
+</section>
 
-<div class="card"><h2>🏆 สถิติชนะ/แพ้ (ย้อนหลัง)</h2>
-<div class="mut">นับแบบเดียวกับตาราง "สถิติย้อนหลัง" ในอินดิเคเตอร์ ใช้ค่าและตัวกรองปัจจุบัน:
-ถึง TP1 ก่อน = ชนะ (+TP1 R) · โดน SL ก่อน = แพ้ (−1R) · กลับทิศก่อนรู้ผล = คิดตามกำไร/ขาดทุนจริง ·
-เทรดที่ยังเปิดอยู่ไม่นับ · แตะชื่อเพื่อดูประวัติ 10 เทรดล่าสุด</div>
-<div id="stats" class="mut" style="margin-top:8px">รอรอบแรก…</div></div>
+<section id="st">
+<div class="card"><div class="field"><span>นับสถิติย้อนหลัง<span class="sub">นับเฉพาะเทรดที่เข้าภายในช่วงนี้ · ตั้งให้ตรงกับ "นับสถิติย้อนหลัง (วัน)" ในอินดิเคเตอร์</span></span>
+<span class="row"><input type="number" min="1" max="60" data-k="stats_days"> วัน</span></div>
+<p class="hint" style="margin:6px 0 0">ถึง TP1 ก่อน = ชนะ (+TP1 R) · โดน SL ก่อน = แพ้ (−1R) · กลับทิศก่อนรู้ผล = คิดตามกำไร/ขาดทุนจริง · เทรดที่ยังเปิดไม่นับ · ใช้ค่าและตัวกรองปัจจุบัน</p></div>
+<div id="stats"></div>
+</section>
 
-<div class="card"><h2>📈 สินทรัพย์ &amp; ไทม์เฟรม</h2>
-<div class="mut">แตะไทม์เฟรมเพื่อเปิด/ปิด · ติ๊กเลือกว่าจะให้แจ้งอะไรบ้าง</div>
+<section id="as">
 <div id="assets"></div>
-<div class="row" style="margin-top:10px">
-<select id="addSel" class="grow"></select><button class="btn sec" onclick="addAsset()">+ เพิ่ม</button></div>
-<div class="row" style="margin-top:6px">
-<input type="text" id="addCode" class="grow" placeholder="หรือพิมพ์รหัส Deriv เอง เช่น R_50"></div></div>
+<div class="card"><h2>➕ เพิ่มสินทรัพย์</h2>
+<div class="row"><select id="addSel" class="grow"></select><button class="btn sm" id="addBtn">เพิ่ม</button></div>
+<div class="row" id="addCodeRow" style="margin-top:8px;display:none"><input type="text" id="addCode" class="grow" placeholder="รหัส Deriv เช่น R_50" autocapitalize="off" autocomplete="off" spellcheck="false"></div>
+<p class="hint" style="margin:8px 0 0">รหัสต้องตรงกับ Deriv ทุกตัวอักษร ถ้าผิด หน้าภาพรวมจะขึ้นข้อความแจ้ง</p></div>
+<div class="card"><h2>🧹 ตัวกรองสัญญาณ (ใช้กับทุกสินทรัพย์)</h2>
+<p class="hint">ลดสัญญาณหลอกตอนตลาดไซด์เวย์ · ควรตั้งให้ตรงกับอินดิเคเตอร์</p>
+<div class="field"><span>แจ้งเฉพาะตอน ADX แรงพอ<span class="sub">ADX = ความแรงเทรนด์ · ต่ำกว่า 20 ไซด์เวย์ · 25+ มีเทรนด์</span></span><label class="sw"><input type="checkbox" data-k="strategy.adx_filter"><i></i></label></div>
+<div class="field" data-dep="strategy.adx_filter"><span>ADX ขั้นต่ำ</span><input type="number" step="0.5" data-k="strategy.adx_min"></div>
+<p class="hint" style="margin:6px 0 0">ยืนยันด้วยเทรนด์ TF ใหญ่ ตั้งแยกในแต่ละสินทรัพย์ด้านบน</p></div>
+</section>
 
-<div class="card"><h2>🧹 ตัวกรองสัญญาณ</h2>
-<div class="mut">ลดสัญญาณหลอกตอนตลาดไซด์เวย์ · ควรตั้งให้ตรงกับอินดิเคเตอร์บน TradingView</div>
-<div class="row" style="margin-top:8px"><label class="t"><input type="checkbox" id="adxF"> แจ้งเฉพาะตอน ADX มากกว่า</label><input type="number" step="0.5" id="adxMin"></div>
-<div class="mut">ADX = ความแรงของเทรนด์ 0–100 (ไม่บอกทิศ) · ต่ำกว่า 20 ไซด์เวย์ · 25 ขึ้นไปเริ่มมีเทรนด์<br>
-ตรงกับอินดิเคเตอร์: "สัญญาณเฉพาะตอน ADX แรง" + "เกณฑ์ ADX ของสัญญาณ"</div>
-<div class="mut" style="margin-top:6px">ยืนยันด้วยเทรนด์ไทม์เฟรมใหญ่: ตั้งแยกในแต่ละสินทรัพย์ด้านบน (ตรงกับ "กรองด้วยเทรนด์ TF ใหญ่")</div></div>
+<section id="nt">
+<div class="card"><h2>📬 ช่องทาง</h2>
+<div class="field"><span>เด้งแจ้งเตือนในมือถือ<span class="sub">ผ่าน Termux:API · ใช้เสียง การสั่น และไฟ LED ด้านล่าง</span></span><label class="sw"><input type="checkbox" data-k="notify.termux"><i></i></label></div>
+<div class="field"><span>Telegram<span class="sub">ส่งเข้าแชต Telegram ด้วย</span></span><label class="sw"><input type="checkbox" data-k="notify.telegram"><i></i></label></div>
+<div data-dep="notify.telegram" data-hide="1">
+<div class="field"><span>Bot token</span><input type="password" class="grow" data-k="notify.telegram_bot_token" placeholder="123456:ABC…" autocomplete="off"></div>
+<div class="field"><span>chat_id</span><input type="text" class="grow" data-k="notify.telegram_chat_id" placeholder="123456789" autocomplete="off"></div></div>
+<div id="chanWarn"></div></div>
 
-<div class="card"><h2>💬 หน้าตาการแจ้งเตือน</h2>
-<div class="row"><label class="t"><input type="radio" name="style" value="detailed"> แบบละเอียด (หลายบรรทัด)</label>
-<label class="t"><input type="radio" name="style" value="compact"> แบบย่อ (บรรทัดเดียว)</label></div>
-<div class="mut" style="margin-top:6px">แสดงข้อมูล:</div><div class="row" id="fields"></div>
-<label class="t"><input type="checkbox" id="emoji"> ใส่อีโมจิ 🟢🔴✅⛔</label>
-<div class="row"><span>ความสำคัญ</span><select id="priority">
-<option value="max">สูงสุด (เด้งบนจอ)</option><option value="high">สูง</option><option value="default">ปกติ</option><option value="low">ต่ำ (เงียบ)</option></select>
-<span>สีไฟ LED</span><input type="color" id="led"></div>
-<div class="prev" id="preview">-</div></div>
+<div class="card" data-dep="notify.termux" data-hide="1"><h2>🔊 เสียง &amp; การสั่น (ในมือถือ)</h2>
+<div class="field"><span>เสียง BUY / SELL</span><select data-k="notify.signal_sound" data-opts="sound"></select></div>
+<div class="field"><span>เสียง TP / SL</span><select data-k="notify.tpsl_sound" data-opts="sound"></select></div>
+<div class="field" id="ttsRow"><span>ภาษาเสียงพูด</span><select data-k="notify.tts_lang"><option value="th">ไทย</option><option value="en">English</option></select></div>
+<div class="field" id="fileRow"><span>ไฟล์เสียง<span class="sub">เช่น ~/storage/downloads/alert.mp3</span></span><input type="text" class="grow" data-k="notify.sound_file" placeholder="~/storage/downloads/alert.mp3"></div>
+<div class="field"><span>การสั่น</span><select data-k="notify.vibrate" data-opts="vib"></select></div>
+<div class="field"><span>ความสำคัญ<span class="sub">สูงสุด = เด้งบนจอแม้ใช้แอปอื่นอยู่</span></span><select data-k="notify.priority"><option value="max">สูงสุด</option><option value="high">สูง</option><option value="default">ปกติ</option><option value="low">ต่ำ (เงียบ)</option></select></div>
+<div class="field"><span>สีไฟ LED<span class="sub">เฉพาะเครื่องที่มีไฟแจ้งเตือน</span></span><input type="color" data-k="notify.led_color"></div></div>
 
-<div class="card"><h2>🔔 เสียง &amp; การสั่น</h2>
-<div class="row"><span style="width:120px">สัญญาณ BUY/SELL</span><select id="sigSound" class="grow"></select></div>
-<div class="row" style="margin-top:6px"><span style="width:120px">TP / SL</span><select id="tpsSound" class="grow"></select></div>
-<div class="row" style="margin-top:6px"><span style="width:120px">ภาษาเสียงพูด</span><select id="tts"><option value="th">ไทย</option><option value="en">English</option></select></div>
-<div class="row" style="margin-top:6px"><span style="width:120px">ไฟล์เสียง</span><input type="text" id="sfile" class="grow" placeholder="~/storage/downloads/alert.mp3"></div>
-<div class="row" style="margin-top:6px"><span style="width:120px">การสั่น</span><select id="vib" class="grow">
-<option value="">ไม่สั่น</option><option value="300">สั้น</option><option value="500,200,500">2 ครั้ง</option>
-<option value="800,200,800,200,800">3 ครั้งยาว</option></select></div></div>
+<div class="card"><h2>💬 หน้าตาข้อความ</h2>
+<div class="lbl" style="margin-top:4px">รูปแบบ</div>
+<div class="seg" data-seg="notify.style"><button data-v="detailed">ละเอียด (หลายบรรทัด)</button><button data-v="compact">ย่อ (บรรทัดเดียว)</button></div>
+<div class="lbl">ข้อมูลในแจ้งเตือน BUY / SELL</div>
+<div class="chips" id="fields"></div>
+<div class="field" style="margin-top:6px"><span>ใส่อีโมจิ 🟢🔴✅⛔</span><label class="sw"><input type="checkbox" data-k="notify.emoji"><i></i></label></div>
+<div class="lbl">ตัวอย่าง</div><div id="preview" class="mut small">-</div>
+<button class="btn sec" id="testBtn" style="width:100%;margin-top:10px">🧪 ส่งแจ้งเตือนทดสอบ</button>
+<p class="hint" style="margin:6px 0 0">ใช้ค่าบนหน้านี้ทันที ไม่ต้องบันทึกก่อน</p></div>
+</section>
 
-<div class="card"><details><summary>📨 Telegram (ไม่บังคับ)</summary>
-<div class="row" style="margin-top:8px"><input type="password" id="tgToken" class="grow" placeholder="Bot token"></div>
-<div class="row" style="margin-top:6px"><input type="text" id="tgChat" class="grow" placeholder="chat_id"></div>
-<label class="t"><input type="checkbox" id="termux"> เด้งแจ้งเตือนในมือถือ (Termux:API)</label></details></div>
+<section id="ad">
+<div class="card"><h2>🧮 ค่าการคำนวณ</h2><p class="hint">ต้องตรงกับ Settings ของอินดิเคเตอร์ ไม่งั้นสัญญาณจะไม่ตรงกัน</p>
+<div class="field"><span>Supertrend factor</span><input type="number" step="0.1" data-k="strategy.supertrend_factor"></div>
+<div class="field"><span>ATR length</span><input type="number" data-k="strategy.atr_period"></div>
+<div class="field"><span>SL = ATR ×</span><input type="number" step="0.1" data-k="strategy.sl_atr_mult"></div>
+<div class="field"><span>TP1 (R)</span><input type="number" step="0.1" data-k="strategy.tp_rr.0"></div>
+<div class="field"><span>TP2 (R)</span><input type="number" step="0.1" data-k="strategy.tp_rr.1"></div>
+<div class="field"><span>TP3 (R)</span><input type="number" step="0.1" data-k="strategy.tp_rr.2"></div></div>
+<div class="card"><h2>⏱️ การทำงาน</h2>
+<div class="field"><span>เช็กราคาทุก<span class="sub">5–300 วินาที · ยิ่งถี่ยิ่งเปลืองแบต/เน็ต</span></span><span class="row"><input type="number" data-k="poll_seconds"> วิ</span></div></div>
+</section>
+</div>
 
-<div class="card"><details><summary>🧮 ค่าการคำนวณ (ให้ตรงกับอินดิเคเตอร์)</summary>
-<div class="row" style="margin-top:8px"><span>Supertrend factor</span><input type="number" step="0.1" id="factor">
-<span>ATR</span><input type="number" id="atr"></div>
-<div class="row" style="margin-top:6px"><span>SL = ATR ×</span><input type="number" step="0.1" id="slm"></div>
-<div class="row" style="margin-top:6px"><span>TP1 R</span><input type="number" step="0.1" id="tp1">
-<span>TP2 R</span><input type="number" step="0.1" id="tp2"><span>TP3 R</span><input type="number" step="0.1" id="tp3"></div>
-<div class="row" style="margin-top:6px"><span>เช็กราคาทุก (วินาที)</span><input type="number" id="poll"></div>
-<div class="row" style="margin-top:6px"><span>นับสถิติย้อนหลัง (วัน)</span><input type="number" id="statsN"><span class="mut">1–60 · 1m ได้สูงสุด ~3.5 วัน</span></div></details></div>
-
-<div class="bar"><button class="btn sec" onclick="testN()">🧪 ทดสอบแจ้งเตือน</button><button class="btn" onclick="save()">💾 บันทึก</button></div>
+<div class="bar" id="bar"><div class="wrap"><span class="msg">● มีการแก้ไขที่ยังไม่บันทึก</span>
+<button class="btn sec sm" id="undoBtn">ยกเลิก</button><button class="btn sm" id="saveBtn">💾 บันทึก</button></div></div>
+<div class="toast" id="toast"></div>
 
 <script>
-let cfg=null, SYMS={}, TFS=[];
 const $=id=>document.getElementById(id);
-const FIELDS={entry:"Entry",sl:"SL",risk:"ระยะ SL",tp1:"TP1",tp2:"TP2",tp3:"TP3",time:"เวลาแท่ง"};
+let cfg=null,saved="",SYMS={},TFS=[],openAsset=null,status={};
+const FIELDS={entry:"จุดเข้า",sl:"SL",risk:"ระยะ SL",tp1:"TP1",tp2:"TP2",tp3:"TP3",time:"เวลาแท่ง"};
 const ALERTS={signal:"BUY/SELL",tp1:"TP1",tp2:"TP2",tp3:"TP3",sl:"SL"};
-const SOUNDS={system:"เสียงแจ้งเตือนของเครื่อง",tts:"พูดออกเสียง (เช่น 'ซื้อ BTCUSD')",file:"ไฟล์เสียงของฉัน",none:"ไม่มีเสียง"};
+const OPTS={sound:{system:"เสียงแจ้งเตือนของเครื่อง",tts:"พูดออกเสียง",file:"ไฟล์เสียงของฉัน",none:"ไม่มีเสียง"},
+ vib:{"":"ไม่สั่น","300":"สั้น","500,200,500":"2 ครั้ง","800,200,800,200,800":"3 ครั้งยาว"}};
 const tfName=m=>m<60?m+"m":m<1440?(m/60)+"h":"1D";
-function esc(s){return String(s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]))}
-function msg(t,cls){$("msg").className="mut "+(cls||"");$("msg").textContent=t}
+const esc=s=>String(s??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const ago=s=>s<60?Math.round(s)+" วิ":s<3600?Math.round(s/60)+" นาที":Math.round(s/3600)+" ชม.";
+function toast(t,err){const e=$("toast");e.textContent=t;e.className="toast show"+(err?" err":"");clearTimeout(e._t);e._t=setTimeout(()=>e.className="toast",2600)}
+function getK(k){return k.split(".").reduce((o,p)=>o?.[p],cfg)}
+function setK(k,v){const ps=k.split(".");const last=ps.pop();ps.reduce((o,p)=>o[p],cfg)[last]=v}
+const dirty=()=>JSON.stringify(cfg)!==saved;
 
-async function load(){
-  const r=await (await fetch("/api/config")).json(); cfg=r.config; SYMS=r.symbols; TFS=r.timeframes;
-  for(const s of ["sigSound","tpsSound"]) $(s).innerHTML=Object.entries(SOUNDS).map(([k,v])=>`<option value="${k}">${v}</option>`).join("");
-  $("fields").innerHTML=Object.entries(FIELDS).map(([k,v])=>`<label class="t"><input type="checkbox" data-f="${k}" onchange="sync()"> ${v}</label>`).join("");
-  fill(); renderAssets(); msg("แก้ไขได้เลย แล้วกด 💾 บันทึก — มีผลทันที ไม่ต้องรีสตาร์ทบอท");
+/* ---------- tabs ---------- */
+function tab(id){document.querySelectorAll("nav button").forEach(b=>b.classList.toggle("on",b.dataset.tab===id));
+ document.querySelectorAll("section").forEach(s=>s.classList.toggle("on",s.id===id));try{localStorage.setItem("tab",id)}catch(e){}}
+$("tabs").onclick=e=>{const b=e.target.closest("button");if(b){tab(b.dataset.tab);scrollTo(0,0)}};
+
+/* ---------- generic bound inputs (data-k) ---------- */
+function fillBound(){
+ document.querySelectorAll("select[data-opts]").forEach(s=>{const o={...OPTS[s.dataset.opts]};const v=getK(s.dataset.k);if(!(v in o))o[v]=v;
+  s.innerHTML=Object.entries(o).map(([k,t])=>`<option value="${esc(k)}">${esc(t)}</option>`).join("")});
+ document.querySelectorAll("[data-k]").forEach(e=>{const v=getK(e.dataset.k);
+  if(e.type==="checkbox")e.checked=!!v;else if(e.type==="color")e.value="#"+v;else e.value=v??""});
+ document.querySelectorAll("[data-seg]").forEach(s=>s.querySelectorAll("button").forEach(b=>b.classList.toggle("on",getK(s.dataset.seg)===b.dataset.v)));
+ renderFields();
 }
-function fill(){
-  const n=cfg.notify,s=cfg.strategy;
-  document.querySelectorAll("input[name=style]").forEach(r=>r.checked=r.value===n.style);
-  document.querySelectorAll("[data-f]").forEach(c=>c.checked=!!n.fields[c.dataset.f]);
-  $("emoji").checked=n.emoji;$("priority").value=n.priority;$("led").value="#"+n.led_color;
-  $("sigSound").value=n.signal_sound;$("tpsSound").value=n.tpsl_sound;$("tts").value=n.tts_lang;$("sfile").value=n.sound_file;
-  $("vib").value=n.vibrate; if($("vib").value!==n.vibrate){$("vib").insertAdjacentHTML("beforeend",`<option value="${esc(n.vibrate)}">${esc(n.vibrate)}</option>`);$("vib").value=n.vibrate}
-  $("tgToken").value=n.telegram_bot_token;$("tgChat").value=n.telegram_chat_id;$("termux").checked=n.termux;
-  $("factor").value=s.supertrend_factor;$("atr").value=s.atr_period;$("slm").value=s.sl_atr_mult;
-  [1,2,3].forEach(i=>$("tp"+i).value=s.tp_rr[i-1]);$("poll").value=cfg.poll_seconds;$("statsN").value=cfg.stats_days;
-  $("adxF").checked=s.adx_filter;$("adxMin").value=s.adx_min;
-  document.querySelectorAll("input,select").forEach(e=>{if(!e.dataset.bound){e.dataset.bound=1;e.addEventListener("change",sync)}});
-  preview();
+document.addEventListener("input",e=>{const el=e.target;if(!el.dataset.k)return;
+ let v=el.type==="checkbox"?el.checked:el.type==="color"?el.value.replace("#",""):el.type==="number"?(el.value===""?getK(el.dataset.k):+el.value):el.value;
+ setK(el.dataset.k,v);changed()});
+document.addEventListener("click",e=>{const b=e.target.closest("[data-seg] button");if(!b)return;
+ setK(b.closest("[data-seg]").dataset.seg,b.dataset.v);fillBound();changed()});
+
+/* things that depend on other settings */
+function deps(){
+ document.querySelectorAll("[data-dep]").forEach(el=>{const on=!!getK(el.dataset.dep);
+  if(el.dataset.hide)el.style.display=on?"":"none";else el.querySelectorAll("input,select").forEach(i=>i.disabled=!on)});
+ const n=cfg.notify,snd=[n.signal_sound,n.tpsl_sound];
+ $("ttsRow").style.display=snd.includes("tts")?"":"none";$("fileRow").style.display=snd.includes("file")?"":"none";
+ let w="";
+ if(!n.termux&&!n.telegram)w='<div class="note err">ปิดทั้งสองช่องทาง = จะไม่ได้รับแจ้งเตือนเลย</div>';
+ else if(n.telegram&&(!n.telegram_bot_token||!n.telegram_chat_id))w='<div class="note warn">ใส่ Bot token และ chat_id ให้ครบ ไม่งั้น Telegram จะไม่ส่ง</div>';
+ if(snd.includes("file")&&!n.sound_file)w+='<div class="note warn">เลือก "ไฟล์เสียงของฉัน" แต่ยังไม่ได้ใส่ที่อยู่ไฟล์</div>';
+ $("chanWarn").innerHTML=w;
 }
-function sync(){
-  const n=cfg.notify,s=cfg.strategy;
-  n.style=(document.querySelector("input[name=style]:checked")||{}).value||"detailed";
-  document.querySelectorAll("[data-f]").forEach(c=>n.fields[c.dataset.f]=c.checked);
-  n.emoji=$("emoji").checked;n.priority=$("priority").value;n.led_color=$("led").value.replace("#","");
-  n.signal_sound=$("sigSound").value;n.tpsl_sound=$("tpsSound").value;n.tts_lang=$("tts").value;n.sound_file=$("sfile").value.trim();
-  n.vibrate=$("vib").value;n.telegram_bot_token=$("tgToken").value.trim();n.telegram_chat_id=$("tgChat").value.trim();n.termux=$("termux").checked;
-  s.supertrend_factor=+$("factor").value;s.atr_period=+$("atr").value;s.sl_atr_mult=+$("slm").value;
-  s.tp_rr=[1,2,3].map(i=>+$("tp"+i).value);cfg.poll_seconds=+$("poll").value;cfg.stats_days=+$("statsN").value;
-  s.adx_filter=$("adxF").checked;s.adx_min=+$("adxMin").value;
-  preview();
+function renderFields(){const f=cfg.notify.fields;
+ $("fields").innerHTML=Object.entries(FIELDS).map(([k,t])=>`<button class="chip ${f[k]?"on":""}" data-field="${k}" ${k==="risk"&&!f.sl?"disabled":""}>${t}</button>`).join("")}
+$("fields").onclick=e=>{const b=e.target.closest("[data-field]");if(!b)return;const f=cfg.notify.fields;f[b.dataset.field]=!f[b.dataset.field];renderFields();changed()};
+
+function changed(){deps();$("bar").classList.toggle("show",dirty());preview()}
+
+/* ---------- assets ---------- */
+function assetSummary(a){
+ if(!a.enabled)return"ปิดอยู่ · ไม่เช็กและไม่แจ้งเตือน";
+ if(!a.timeframes.length)return"⚠️ ยังไม่ได้เลือกไทม์เฟรม";
+ const al=Object.entries(ALERTS).filter(([k])=>a.alerts[k]).map(([,v])=>v);
+ return a.timeframes.map(tfName).join(", ")+(a.confirm_tf?" · ยืนยัน "+tfName(a.confirm_tf):"")+" · แจ้ง "+(al.length?al.join(" "):"ไม่มี");
+}
+function fixAsset(a){ // keep settings consistent with each other
+ const maxTf=Math.max(0,...a.timeframes);
+ if(a.confirm_tf&&a.confirm_tf<=maxTf){a.confirm_tf=0;return"ยกเลิก \"ยืนยันด้วย TF ใหญ่\" เพราะต้องใหญ่กว่าทุกไทม์เฟรมที่เลือก"}
+ return"";
 }
 function renderAssets(){
-  $("assets").innerHTML=cfg.assets.map((a,i)=>`
-  <div class="asset"><div class="row between"><label class="t"><input type="checkbox" ${a.enabled?"checked":""} onchange="cfg.assets[${i}].enabled=this.checked">
-  <span><span class="sym">${esc(a.label)}</span> <span class="code">${esc(a.symbol)}</span></span></label>
-  <button class="btn del" onclick="delAsset(${i})">ลบ</button></div>
-  <div class="row" style="margin:6px 0">${TFS.map(m=>`<button class="chip ${a.timeframes.includes(m)?"on":""}" onclick="toggleTf(${i},${m})">${tfName(m)}</button>`).join("")}</div>
-  <div class="row">${Object.entries(ALERTS).map(([k,v])=>`<label class="t"><input type="checkbox" ${a.alerts[k]?"checked":""} onchange="cfg.assets[${i}].alerts['${k}']=this.checked"> ${v}</label>`).join("")}</div>
-  <div class="row" style="margin-bottom:6px"><span class="mut">ยืนยันด้วยเทรนด์ TF ใหญ่</span><select onchange="cfg.assets[${i}].confirm_tf=+this.value">
-  <option value="0">ไม่ใช้</option>${TFS.filter(m=>m>Math.min(...(a.timeframes.length?a.timeframes:[1]))).map(m=>`<option value="${m}" ${a.confirm_tf===m?"selected":""}>${tfName(m)}</option>`).join("")}</select></div>
-  <div class="row"><span class="mut">ชื่อที่แสดง</span><input type="text" class="grow" value="${esc(a.label)}" onchange="cfg.assets[${i}].label=this.value;renderAssets();preview()"></div></div>`).join("")
-  || `<div class="mut">ยังไม่มีสินทรัพย์</div>`;
-  const used=new Set(cfg.assets.map(a=>a.symbol));
-  $("addSel").innerHTML=`<option value="">— เลือกสินทรัพย์ —</option>`+Object.entries(SYMS).filter(([k])=>!used.has(k)).map(([k,v])=>`<option value="${k}">${esc(v)} (${k})</option>`).join("");
+ $("assets").innerHTML=cfg.assets.map((a,i)=>{const maxTf=Math.max(0,...a.timeframes);const sig=a.alerts.signal;
+ return`<div class="asset ${a.enabled?"":"off"} ${openAsset===a.symbol?"open":""}" data-i="${i}">
+ <div class="ahead"><label class="sw"><input type="checkbox" data-a="enabled" ${a.enabled?"checked":""}><i></i></label>
+ <div class="info" data-act="toggle"><div><b>${esc(a.label)}</b> <span class="mut small">${esc(a.symbol)}</span></div><div class="sum">${esc(assetSummary(a))}</div></div>
+ <span class="chev" data-act="toggle">›</span></div>
+ <div class="abody">
+ <div class="lbl">ไทม์เฟรม (แตะเพื่อเลือก ได้หลายอัน)</div>
+ <div class="chips">${TFS.map(m=>`<button class="chip ${a.timeframes.includes(m)?"on":""}" data-tf="${m}">${tfName(m)}</button>`).join("")}</div>
+ <div class="lbl">แจ้งเตือนอะไรบ้าง</div>
+ <div class="chips">${Object.entries(ALERTS).map(([k,v])=>`<button class="chip ${a.alerts[k]?"on":""}" data-al="${k}" ${k!=="signal"&&!sig?"disabled":""}>${v}</button>`).join("")}</div>
+ ${sig?"":`<div class="note warn">ปิด BUY/SELL แล้ว TP/SL จะไม่แจ้งด้วย (ไม่รู้ว่าเข้าออเดอร์ไหน)</div>`}
+ <div class="lbl">ยืนยันด้วยเทรนด์ไทม์เฟรมใหญ่</div>
+ <select data-a="confirm_tf" style="width:100%"><option value="0">ไม่ใช้</option>${TFS.filter(m=>m>maxTf).map(m=>`<option value="${m}" ${a.confirm_tf===m?"selected":""}>${tfName(m)} — BUY เฉพาะตอน ${tfName(m)} ขาขึ้น, SELL เฉพาะขาลง</option>`).join("")}</select>
+ <div class="lbl">ชื่อที่แสดงในแจ้งเตือน</div>
+ <input type="text" style="width:100%" data-a="label" value="${esc(a.label)}" maxlength="40">
+ <button class="btn danger sm" data-act="del" style="margin-top:14px;width:100%">🗑 ลบ ${esc(a.label)}</button>
+ </div></div>`}).join("")||`<div class="empty">ยังไม่มีสินทรัพย์ — เพิ่มด้านล่าง</div>`;
+ const used=new Set(cfg.assets.map(a=>a.symbol));
+ const sel=$("addSel"),cur=sel.value;
+ sel.innerHTML=`<option value="">— เลือกสินทรัพย์ —</option>`+Object.entries(SYMS).filter(([k])=>!used.has(k)).map(([k,v])=>`<option value="${k}">${esc(v)} (${k})</option>`).join("")+`<option value="__custom">✏️ พิมพ์รหัสเอง…</option>`;
+ if([...sel.options].some(o=>o.value===cur))sel.value=cur;
 }
-function toggleTf(i,m){const t=cfg.assets[i].timeframes;const j=t.indexOf(m);j>=0?t.splice(j,1):t.push(m);t.sort((a,b)=>a-b);renderAssets()}
-function delAsset(i){if(confirm("ลบ "+cfg.assets[i].label+" ?")){cfg.assets.splice(i,1);renderAssets()}}
-function addAsset(){
-  const code=($("addCode").value.trim()||$("addSel").value);
-  if(!code)return msg("เลือกหรือพิมพ์รหัสสินทรัพย์ก่อน","err");
-  if(cfg.assets.some(a=>a.symbol===code))return msg(code+" มีอยู่แล้ว","err");
-  cfg.assets.push({symbol:code,label:SYMS[code]||code,enabled:true,timeframes:[15],confirm_tf:0,alerts:{signal:true,tp1:true,tp2:true,tp3:true,sl:true}});
-  $("addCode").value="";renderAssets();msg("เพิ่ม "+code+" แล้ว (ค่าเริ่มต้น 15m) — อย่าลืมกดบันทึก","ok");
+$("assets").addEventListener("click",e=>{const box=e.target.closest(".asset");if(!box)return;const a=cfg.assets[+box.dataset.i];const t=e.target.closest("button,[data-act]");if(!t)return;
+ if(t.dataset.act==="toggle"){openAsset=openAsset===a.symbol?null:a.symbol;renderAssets();return}
+ if(t.dataset.act==="del"){if(confirm("ลบ "+a.label+" ออกจากรายการ?")){cfg.assets.splice(+box.dataset.i,1);renderAssets();changed();toast("ลบแล้ว — กดบันทึกเพื่อยืนยัน")}return}
+ if(t.dataset.tf){const m=+t.dataset.tf,j=a.timeframes.indexOf(m);j>=0?a.timeframes.splice(j,1):a.timeframes.push(m);a.timeframes.sort((x,y)=>x-y);const w=fixAsset(a);if(w)toast(w);renderAssets();changed();return}
+ if(t.dataset.al){a.alerts[t.dataset.al]=!a.alerts[t.dataset.al];renderAssets();changed()}});
+$("assets").addEventListener("change",e=>{const box=e.target.closest(".asset");if(!box)return;const a=cfg.assets[+box.dataset.i];const k=e.target.dataset.a;if(!k)return;
+ if(k==="enabled")a.enabled=e.target.checked;else if(k==="confirm_tf")a.confirm_tf=+e.target.value;else if(k==="label")a.label=e.target.value.trim()||SYMS[a.symbol]||a.symbol;
+ renderAssets();changed()});
+$("addSel").onchange=()=>{$("addCodeRow").style.display=$("addSel").value==="__custom"?"":"none";if($("addSel").value==="__custom")$("addCode").focus()};
+$("addBtn").onclick=()=>{let code=$("addSel").value;if(code==="__custom")code=$("addCode").value.trim();
+ if(!code)return toast("เลือกสินทรัพย์ก่อน",1);
+ if(!/^[A-Za-z0-9_]{2,30}$/.test(code))return toast("รหัสใช้ได้แค่ A-Z 0-9 และ _",1);
+ if(cfg.assets.some(a=>a.symbol===code))return toast(code+" มีอยู่แล้ว",1);
+ cfg.assets.push({symbol:code,label:SYMS[code]||code,enabled:true,timeframes:[15],confirm_tf:0,alerts:{signal:true,tp1:true,tp2:true,tp3:true,sl:true}});
+ openAsset=code;$("addCode").value="";$("addSel").value="";$("addCodeRow").style.display="none";renderAssets();changed();toast("เพิ่ม "+(SYMS[code]||code)+" (15m) — ปรับได้ แล้วกดบันทึก")};
+
+/* ---------- preview / test ---------- */
+let pt=null;function preview(){clearTimeout(pt);pt=setTimeout(async()=>{try{
+ const r=await (await fetch("/api/preview",{method:"POST",body:JSON.stringify(cfg)})).json();
+ $("preview").innerHTML=["signal","tp","sl"].map(k=>`<div class="prev"><b>${esc(r[k][0])}</b>${esc(r[k][1])}</div>`).join("")}catch(e){}},250)}
+$("testBtn").onclick=async e=>{const b=e.currentTarget;b.disabled=true;b.textContent="กำลังส่ง…";
+ try{const r=await fetch("/api/test",{method:"POST",body:JSON.stringify(cfg)});toast(r.ok?"ส่งแล้ว — ดูที่แถบแจ้งเตือนของมือถือ":"ส่งไม่สำเร็จ",!r.ok)}catch(x){toast("ติดต่อบอทไม่ได้",1)}
+ b.disabled=false;b.textContent="🧪 ส่งแจ้งเตือนทดสอบ";refresh()};
+
+/* ---------- save / undo ---------- */
+$("saveBtn").onclick=async()=>{const b=$("saveBtn");b.disabled=true;b.textContent="กำลังบันทึก…";
+ try{const r=await fetch("/api/config",{method:"POST",body:JSON.stringify(cfg)});const j=await r.json();
+  if(!r.ok)throw new Error(j.error);cfg=j.config;saved=JSON.stringify(cfg);fillBound();renderAssets();changed();toast("✅ บันทึกแล้ว มีผลทันที");setTimeout(refresh,1500)}
+ catch(x){toast("บันทึกไม่สำเร็จ: "+(x.message||"ติดต่อบอทไม่ได้"),1)}
+ b.disabled=false;b.textContent="💾 บันทึก"};
+$("undoBtn").onclick=()=>{cfg=JSON.parse(saved);fillBound();renderAssets();changed();toast("ยกเลิกการแก้ไขแล้ว")};
+addEventListener("beforeunload",e=>{if(cfg&&dirty()){e.preventDefault();e.returnValue=""}});
+$("clearLog").onclick=async()=>{if(!confirm("ล้างรายการแจ้งเตือนล่าสุด?"))return;await fetch("/api/log/clear",{method:"POST"});refresh();toast("ล้างแล้ว")};
+
+/* ---------- live status ---------- */
+const adxWord=v=>v===""||v==="-"?"":+v<20?"ไซด์เวย์":+v<25?"เริ่มมีแรง":"มีเทรนด์";
+function chartCard(s){
+ if(s.error)return`<div class="chart"><div class="top"><span class="name">${esc(s.label)}<span class="tf">${tfName(s.tf)}</span></span></div><div class="note err">ดึงราคาไม่ได้: ${esc(s.error)}<br>ตรวจรหัสสินทรัพย์ในแท็บ 📈 สินทรัพย์</div></div>`;
+ const t=s.trade;let tr="";
+ if(t){const st=t.closed?'<span class="mut">จบแล้ว</span>':'<span class="pill UP" style="font-weight:600">กำลังติดตาม</span>';
+  tr=`<div class="trade"><div class="row between"><span><span class="side ${t.side}">${t.side==="LONG"?"BUY":"SELL"}</span> <span class="mut small">เข้าแท่ง ${esc(t.time)}</span></span>${st}</div>
+  <div class="lv"><div>เข้า<b>${esc(t.entry)}</b></div><div>SL<b class="neg">${esc(t.sl)}</b></div>${t.tps.map((p,k)=>`<div class="${t.tp_hit[k]?"hit":""}">TP${k+1}<b>${esc(p)}</b></div>`).join("")}</div></div>`}
+ return`<div class="chart"><div class="top"><span class="name">${esc(s.label)}<span class="tf">${tfName(s.tf)}</span></span><span class="pill ${s.trend}">${s.trend==="UP"?"▲ ขาขึ้น":"▼ ขาลง"}</span></div>
+ <div class="kv"><span class="mut">ราคา <b>${esc(s.close)}</b></span><span class="mut">ADX <b>${esc(s.adx)}</b> ${adxWord(s.adx)}</span><span class="mut">แท่งล่าสุด ${esc(s.candle)}</span></div>
+ ${tr||'<div class="note mut">ยังไม่มีสัญญาณตั้งแต่เริ่มรัน</div>'}${s.filtered?`<div class="note warn">🧹 ${esc(s.filtered)}</div>`:""}</div>`;
 }
-let pt=null;function preview(){clearTimeout(pt);pt=setTimeout(async()=>{
-  const r=await (await fetch("/api/preview",{method:"POST",body:JSON.stringify(cfg)})).json();
-  $("preview").innerHTML=`<span class="mut">ตัวอย่าง:</span>\n<b>${esc(r.signal[0])}</b>${esc(r.signal[1])}\n\n<b>${esc(r.tp[0])}</b>${esc(r.tp[1])}`;},250)}
-async function save(){
-  const r=await fetch("/api/config",{method:"POST",body:JSON.stringify(cfg)});const j=await r.json();
-  if(!r.ok)return msg(j.error||"บันทึกไม่สำเร็จ","err");
-  cfg=j.config;fill();renderAssets();msg("✅ บันทึกแล้ว "+new Date().toLocaleTimeString(),"ok");refresh();
-}
-async function testN(){await fetch("/api/test",{method:"POST",body:JSON.stringify(cfg)});msg("ส่งแจ้งเตือนทดสอบแล้ว (ใช้ค่าบนหน้านี้ ยังไม่ได้บันทึก)","ok");setTimeout(refresh,800)}
-const OUT={SL:"โดน SL",REV:"กลับทิศ"};
-const sideTh=s=>s==="LONG"?'<span class="UP">BUY</span>':'<span class="DOWN">SELL</span>';
-function statsHtml(s){const x=s.stats,cls=v=>v>0?"pos":v<0?"neg":"";
-  const wr=x.win_rate===null?"-":x.win_rate.toFixed(2)+" %";
-  return `<div class="st"><details><summary>${esc(s.label)} ${tfName(s.tf)}
-  <span class="mut" style="font-weight:400">· ${x.days} วัน (${esc(x.since)} – ${esc(x.until)})</span></summary>
-  <table style="margin-top:6px"><tr><th>#</th><th>ฝั่ง</th><th>ผล</th><th>R</th><th>โดน SL</th><th>เวลาเข้า</th></tr>
-  ${x.history.map((h,i)=>`<tr><td>${i+1}</td><td>${sideTh(h.side)}</td><td>${esc(OUT[h.outcome]||h.outcome)}</td>
-  <td class="${cls(h.r)}">${h.r>0?"+":""}${h.r.toFixed(2)}</td><td>${h.sl?"ใช่":"ไม่"}</td><td>${esc(h.time)}</td></tr>`).join("")||'<tr><td colspan="6">ยังไม่มีเทรด</td></tr>'}</table></details>
-  <div class="sgrid"><div>สัญญาณ<b>${x.signals}</b></div><div>รู้ผลแล้ว<b>${x.closed}</b></div><div>อัตราชนะ<b>${wr}</b></div>
-  <div>ชนะ<b class="pos">${x.wins}</b></div><div>แพ้<b class="neg">${x.losses}</b></div><div>กำไร<b class="${cls(x.profit_r)}">${x.profit_r>0?"+":""}${x.profit_r.toFixed(2)} R</b></div></div>
-  ${x.open?'<div class="mut">+ มี 1 เทรดที่ยังเปิดอยู่ (ยังไม่นับ)</div>':""}</div>`}
+function statsCard(s){const x=s.stats,cls=v=>v>0?"pos":v<0?"neg":"",sg=v=>(v>0?"+":"")+v.toFixed(2);
+ return`<div class="card"><div class="row between"><b>${esc(s.label)} <span class="mut">${tfName(s.tf)}</span></b><span class="mut small">${x.days} วัน · ${esc(x.since)} – ${esc(x.until)}</span></div>
+ <div class="sgrid"><div>สัญญาณ<b>${x.signals}</b></div><div>รู้ผลแล้ว<b>${x.closed}</b></div><div>อัตราชนะ<b>${x.win_rate===null?"-":x.win_rate.toFixed(1)+"%"}</b></div>
+ <div>ชนะ<b class="pos">${x.wins}</b></div><div>แพ้<b class="neg">${x.losses}</b></div><div>กำไร<b class="${cls(x.profit_r)}">${sg(x.profit_r)}R</b></div></div>
+ ${x.closed&&x.closed<30?`<div class="note warn">มีแค่ ${x.closed} เทรด ตัวเลขยังเชื่อไม่ได้มาก (ควร 30+)</div>`:""}
+ ${x.open?'<div class="hint" style="margin:6px 0 0">+ 1 เทรดที่ยังเปิดอยู่ (ยังไม่นับ)</div>':""}
+ <details><summary>ประวัติ 10 เทรดล่าสุด</summary><table><tr><th>เข้า</th><th>ฝั่ง</th><th>ผล</th><th>R</th></tr>
+ ${x.history.map(h=>`<tr><td>${esc(h.time)}</td><td class="side ${h.side}">${h.side==="LONG"?"BUY":"SELL"}</td><td>${esc({SL:"โดน SL",REV:"กลับทิศ"}[h.outcome]||h.outcome)}</td><td class="${cls(h.r)}">${sg(h.r)}</td></tr>`).join("")||'<tr><td colspan="4" class="mut">ยังไม่มี</td></tr>'}</table></details></div>`}
 async function refresh(){
-  try{const r=await (await fetch("/api/status")).json();
-  const rows=Object.values(r.status).sort((a,b)=>(a.label+a.tf).localeCompare(b.label+b.tf));
-  $("status").innerHTML=rows.length?`<table><tr><th>สินทรัพย์</th><th>เทรนด์</th><th>เช็กล่าสุด</th></tr>`+rows.map(s=>`<tr><td><b>${esc(s.label)}</b> ${tfName(s.tf)}${s.trade?`<div class="mut">${esc(s.trade)}</div>`:""}</td>
-   <td>${s.error?`<span class="err">${esc(s.error)}</span>`:`<span class="${s.trend}">${s.trend==="UP"?"▲ ขึ้น":"▼ ลง"}</span><div class="mut">${esc(s.close||"")} · ADX ${esc(s.adx||"-")}</div>`}${s.filtered?`<div class="mut">🧹 ${esc(s.filtered)}</div>`:""}</td>
-   <td>${Math.round(r.now-s.checked)} วิ<div class="mut">แท่ง ${esc(s.candle||"-")}</div></td></tr>`).join("")+`</table>`:"รอรอบแรก…";
-  $("stats").innerHTML=rows.filter(s=>s.stats).map(statsHtml).join("")||"รอรอบแรก…";
-  $("log").innerHTML=r.log.length?r.log.map(l=>`<div class="prev"><span class="mut">${new Date(l.time*1000).toLocaleString()}</span>\n<b>${esc(l.title)}</b>${esc(l.body)}</div>`).join(""):"ยังไม่มี";
-  }catch(e){$("status").innerHTML='<span class="err">ติดต่อบอทไม่ได้ — บอทใน Termux ยังรันอยู่ไหม?</span>'}
+ try{const r=await (await fetch("/api/status")).json();status=r;
+  const rows=Object.values(r.status).sort((a,b)=>(a.label+a.tf).localeCompare(b.label+b.tf,undefined,{numeric:true}));
+  const last=Math.max(0,...rows.map(s=>s.checked||0));
+  $("dot").className="dot "+(last&&r.now-last<180?"ok":"bad");
+  $("live").textContent=last?"เช็กล่าสุด "+ago(r.now-last)+"ที่แล้ว":"รอรอบแรก…";
+  const empty=`<div class="empty">ยังไม่มีกราฟที่เปิดอยู่ — ไปที่ 📈 สินทรัพย์</div>`;
+  $("charts").innerHTML=rows.length?rows.map(chartCard).join(""):(last?empty:'<div class="empty">กำลังโหลดราคารอบแรก…</div>');
+  const st=rows.filter(s=>s.stats);$("stats").innerHTML=st.length?st.map(statsCard).join(""):(rows.length?'<div class="empty">กำลังคำนวณ…</div>':empty);
+  $("log").innerHTML=r.log.length?r.log.slice(0,20).map(l=>`<div class="log"><span class="t">${new Date(l.time*1000).toLocaleString("th-TH",{day:"2-digit",month:"2-digit",hour:"2-digit",minute:"2-digit"})}</span><b>${esc(l.title)}</b>${esc(l.body)}</div>`).join(""):'<div class="empty">ยังไม่มีแจ้งเตือน</div>';
+ }catch(e){$("dot").className="dot bad";$("live").textContent="ติดต่อบอทไม่ได้";
+  $("charts").innerHTML='<div class="note err">ติดต่อบอทไม่ได้ — บอทใน Termux ยังรันอยู่ไหม?</div>'}
 }
-load();refresh();setInterval(refresh,10000);
+async function load(){
+ const r=await (await fetch("/api/config")).json();cfg=r.config;saved=JSON.stringify(cfg);SYMS=r.symbols;TFS=r.timeframes;
+ fillBound();renderAssets();changed();
+}
+let t0="ov";try{t0=localStorage.getItem("tab")||"ov"}catch(e){}
+if(!$(t0))t0="ov";tab(t0);
+load().catch(()=>toast("โหลดการตั้งค่าไม่ได้",1));refresh();setInterval(refresh,10000);
 </script></body></html>
 """
 
