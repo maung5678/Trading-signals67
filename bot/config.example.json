@@ -88,7 +88,7 @@
   },
   "poll_seconds": 20,
   "candles": 300,
-  "stats_candles": 1000,
+  "stats_days": 7,
   "timezone_offset_hours": 7,
   "dashboard_port": 8765,
   "deriv_app_id": "1089",

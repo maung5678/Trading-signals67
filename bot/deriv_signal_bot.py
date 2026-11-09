@@ -89,8 +89,9 @@ DEFAULT_CONFIG = {
     },
     "poll_seconds": 20,
     "candles": 300,
-    # How many candles the win-rate statistics look back over (Deriv allows up to 5000).
-    "stats_candles": 1000,
+    # Win-rate statistics count trades entered in the last N days (same as the indicator's
+    # "นับสถิติย้อนหลัง (วัน)"). Deriv returns at most 5000 candles, so 1m charts reach ~3.5 days.
+    "stats_days": 7,
     "timezone_offset_hours": 7,
     "dashboard_port": 8765,
     "deriv_app_id": "1089",
@@ -253,19 +254,25 @@ def update_trade(trade, candle):
     return events
 
 
-def backtest(candles, direction, atr, strategy, allowed=None, history_size=10):
+def backtest(candles, direction, atr, strategy, allowed=None, history_size=10, since_epoch=0):
     """Win-rate statistics, counted exactly like the indicator's "สถิติย้อนหลัง" table:
     - TP1 before SL = win (+TP1 R), SL before TP1 = loss (-1R)
     - an opposite signal before either = closed at that candle's close (win/loss by its real R)
     - history keeps the best TP reached ("TP2", "TP1→SL", "REV" ...), newest first.
-    `allowed(i, side)` returns False for signals removed by the filters."""
+    `allowed(i, side)` returns False for signals removed by the filters.
+    Only trades entered at or after `since_epoch` are counted (earlier candles just warm up)."""
     rr = strategy["tp_rr"]
     st = {"signals": 0, "wins": 0, "losses": 0, "profit_r": 0.0}
     hist = []
     t = None  # open trade: side, dir, entry, sl, tps, reached, resolved, recorded, epoch
 
+    def count(field, r):
+        if t["epoch"] >= since_epoch:
+            st[field] += 1
+            st["profit_r"] += r
+
     def record(outcome, r, sl_hit):
-        if not t["recorded"]:
+        if not t["recorded"] and t["epoch"] >= since_epoch:
             hist.insert(0, {"side": t["side"], "outcome": outcome, "r": round(r, 2), "sl": sl_hit, "epoch": t["epoch"]})
             del hist[history_size:]
             t["recorded"] = True
@@ -280,14 +287,12 @@ def backtest(candles, direction, atr, strategy, allowed=None, history_size=10):
             # 1) stats: SL first, then TP1
             if not t["resolved"]:
                 if sl_hit:
-                    st["losses"] += 1
-                    st["profit_r"] -= 1.0
+                    count("losses", -1.0)
                     record("SL", -1.0, True)
                     t["resolved"] = True
                     t["dir"] = 0
                 elif (c["high"] >= t["tps"][0] if d == 1 else c["low"] <= t["tps"][0]):
-                    st["wins"] += 1
-                    st["profit_r"] += rr[0]
+                    count("wins", rr[0])
                     t["resolved"] = True
             # 2) came back to SL after TP1
             if t["dir"] != 0 and t["reached"][0] and sl_hit:
@@ -306,8 +311,7 @@ def backtest(candles, direction, atr, strategy, allowed=None, history_size=10):
             risk = abs(t["entry"] - t["sl"])
             rev_r = (c["close"] - t["entry"]) * t["dir"] / risk if risk > 0 else 0.0
             if not t["resolved"]:
-                st["profit_r"] += rev_r
-                st["wins" if rev_r > 0 else "losses"] += 1
+                count("wins" if rev_r > 0 else "losses", rev_r)
                 t["resolved"] = True
             best = max([k for k in range(3) if t["reached"][k]] or [-1])
             record("TP%d" % (best + 1) if best >= 0 else "REV", rr[best] if best >= 0 else rev_r, False)
@@ -315,7 +319,7 @@ def backtest(candles, direction, atr, strategy, allowed=None, history_size=10):
             tr = make_trade(side, c, atr[i], strategy)
             t = {"side": side, "dir": 1 if side == "LONG" else -1, "entry": tr["entry"], "sl": tr["sl"],
                  "tps": tr["tps"], "reached": [False] * 3, "resolved": False, "recorded": False, "epoch": c["epoch"]}
-            st["signals"] += 1
+            st["signals"] += 1 if c["epoch"] >= since_epoch else 0
     closed = st["wins"] + st["losses"]
     st["closed"] = closed
     st["win_rate"] = round(100.0 * st["wins"] / closed, 2) if closed else None
@@ -407,7 +411,8 @@ def normalize_config(raw):
     n["led_color"] = re.sub(r"[^0-9a-fA-F]", "", str(n["led_color"]))[:6] or "00ff00"
     n["vibrate"] = re.sub(r"[^0-9,]", "", str(n["vibrate"]))[:40]
     cfg["poll_seconds"] = min(max(int(cfg["poll_seconds"]), 5), 300)
-    cfg["stats_candles"] = min(max(int(cfg.get("stats_candles", 1000)), 100), 5000)
+    cfg.pop("stats_candles", None)
+    cfg["stats_days"] = min(max(int(cfg.get("stats_days", 7)), 1), 60)
     cfg["dashboard_port"] = int(cfg["dashboard_port"])
     return cfg
 
@@ -739,9 +744,11 @@ def update_stats(deriv, cfg, asset, tf, candles, shared, cache):
     """Keep a longer candle history per chart (fetched once, then extended with the
     regular 300-candle fetch) and recompute the win-rate table when it changes."""
     key = "%s_%d" % (asset["symbol"], tf)
-    want = cfg["stats_candles"]
+    days = cfg["stats_days"]
+    # enough candles for the window plus warm-up for ATR / ADX / Supertrend
+    want = min(5000, days * 1440 // tf + 200)
     s = cfg["strategy"]
-    sig = json.dumps([s, asset.get("confirm_tf"), want], sort_keys=True)
+    sig = json.dumps([s, asset.get("confirm_tf"), days], sort_keys=True)
     entry = STATS_CACHE.get(key)
     if entry is None or entry["want"] != want:
         entry = {"candles": deriv.closed_candles(asset["symbol"], tf * 60, want), "sig": None, "last": 0, "want": want}
@@ -756,10 +763,12 @@ def update_stats(deriv, cfg, asset, tf, candles, shared, cache):
     _, direction, atr = supertrend(H, L, C, s["supertrend_factor"], s["atr_period"])
     _, _, adx = adx_dmi(H, L, C, s["adx_length"], s["adx_smoothing"])
     allowed = lambda i, side: not filter_reasons(deriv, cfg, asset, tf, side, i, c[i], adx, cache)
-    res = backtest(c, direction, atr, s, allowed)
+    since = max(c[-1]["epoch"] + tf * 60 - days * 86400, c[min(len(c) - 1, 100)]["epoch"])
+    res = backtest(c, direction, atr, s, allowed, since_epoch=since)
     for h in res["history"]:
         h["time"] = fmt_time(h.pop("epoch"), cfg)
-    res.update(candles=len(c), since=fmt_time(c[0]["epoch"], cfg), until=fmt_time(c[-1]["epoch"], cfg))
+    res.update(days=round((c[-1]["epoch"] + tf * 60 - since) / 86400.0, 1),
+               since=fmt_time(since, cfg), until=fmt_time(c[-1]["epoch"], cfg))
     entry["sig"], entry["last"] = sig, c[-1]["epoch"]
     shared.set_status(key, stats=res)
 
@@ -1024,7 +1033,7 @@ details summary{cursor:pointer;font-weight:600}
 <div class="row" style="margin-top:6px"><span>TP1 R</span><input type="number" step="0.1" id="tp1">
 <span>TP2 R</span><input type="number" step="0.1" id="tp2"><span>TP3 R</span><input type="number" step="0.1" id="tp3"></div>
 <div class="row" style="margin-top:6px"><span>เช็กราคาทุก (วินาที)</span><input type="number" id="poll"></div>
-<div class="row" style="margin-top:6px"><span>สถิติย้อนหลัง (แท่ง)</span><input type="number" step="100" id="statsN"><span class="mut">100–5000</span></div></details></div>
+<div class="row" style="margin-top:6px"><span>นับสถิติย้อนหลัง (วัน)</span><input type="number" id="statsN"><span class="mut">1–60 · 1m ได้สูงสุด ~3.5 วัน</span></div></details></div>
 
 <div class="bar"><button class="btn sec" onclick="testN()">🧪 ทดสอบแจ้งเตือน</button><button class="btn" onclick="save()">💾 บันทึก</button></div>
 
@@ -1053,7 +1062,7 @@ function fill(){
   $("vib").value=n.vibrate; if($("vib").value!==n.vibrate){$("vib").insertAdjacentHTML("beforeend",`<option value="${esc(n.vibrate)}">${esc(n.vibrate)}</option>`);$("vib").value=n.vibrate}
   $("tgToken").value=n.telegram_bot_token;$("tgChat").value=n.telegram_chat_id;$("termux").checked=n.termux;
   $("factor").value=s.supertrend_factor;$("atr").value=s.atr_period;$("slm").value=s.sl_atr_mult;
-  [1,2,3].forEach(i=>$("tp"+i).value=s.tp_rr[i-1]);$("poll").value=cfg.poll_seconds;$("statsN").value=cfg.stats_candles;
+  [1,2,3].forEach(i=>$("tp"+i).value=s.tp_rr[i-1]);$("poll").value=cfg.poll_seconds;$("statsN").value=cfg.stats_days;
   $("adxF").checked=s.adx_filter;$("adxMin").value=s.adx_min;
   document.querySelectorAll("input,select").forEach(e=>{if(!e.dataset.bound){e.dataset.bound=1;e.addEventListener("change",sync)}});
   preview();
@@ -1066,7 +1075,7 @@ function sync(){
   n.signal_sound=$("sigSound").value;n.tpsl_sound=$("tpsSound").value;n.tts_lang=$("tts").value;n.sound_file=$("sfile").value.trim();
   n.vibrate=$("vib").value;n.telegram_bot_token=$("tgToken").value.trim();n.telegram_chat_id=$("tgChat").value.trim();n.termux=$("termux").checked;
   s.supertrend_factor=+$("factor").value;s.atr_period=+$("atr").value;s.sl_atr_mult=+$("slm").value;
-  s.tp_rr=[1,2,3].map(i=>+$("tp"+i).value);cfg.poll_seconds=+$("poll").value;cfg.stats_candles=+$("statsN").value;
+  s.tp_rr=[1,2,3].map(i=>+$("tp"+i).value);cfg.poll_seconds=+$("poll").value;cfg.stats_days=+$("statsN").value;
   s.adx_filter=$("adxF").checked;s.adx_min=+$("adxMin").value;
   preview();
 }
@@ -1107,7 +1116,7 @@ const sideTh=s=>s==="LONG"?'<span class="UP">BUY</span>':'<span class="DOWN">SEL
 function statsHtml(s){const x=s.stats,cls=v=>v>0?"pos":v<0?"neg":"";
   const wr=x.win_rate===null?"-":x.win_rate.toFixed(2)+" %";
   return `<div class="st"><details><summary>${esc(s.label)} ${tfName(s.tf)}
-  <span class="mut" style="font-weight:400">· ${x.candles} แท่ง (${esc(x.since)} – ${esc(x.until)})</span></summary>
+  <span class="mut" style="font-weight:400">· ${x.days} วัน (${esc(x.since)} – ${esc(x.until)})</span></summary>
   <table style="margin-top:6px"><tr><th>#</th><th>ฝั่ง</th><th>ผล</th><th>R</th><th>โดน SL</th><th>เวลาเข้า</th></tr>
   ${x.history.map((h,i)=>`<tr><td>${i+1}</td><td>${sideTh(h.side)}</td><td>${esc(OUT[h.outcome]||h.outcome)}</td>
   <td class="${cls(h.r)}">${h.r>0?"+":""}${h.r.toFixed(2)}</td><td>${h.sl?"ใช่":"ไม่"}</td><td>${esc(h.time)}</td></tr>`).join("")||'<tr><td colspan="6">ยังไม่มีเทรด</td></tr>'}</table></details>

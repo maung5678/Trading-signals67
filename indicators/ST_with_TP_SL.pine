@@ -73,6 +73,7 @@ showTelegramBannerInput = input.bool(false, "แสดงแบนเนอร�
 dashboardTextSizeInput = input.string(size.tiny, "ขนาดตัวอักษร", options = [size.tiny, size.small, size.normal], tooltip = "tiny เหมาะกับมือถือ", group = DASHBOARD_GROUP)
 statsModeInput = input.string(MODE_COMPACT, "สถิติชนะ/แพ้", options = [MODE_FULL, MODE_COMPACT, MODE_HIDDEN], inline = "stats", tooltip = "สถิติย้อนหลังของสัญญาณบนกราฟนี้ · ย่อ = อัตราชนะ + กำไร (R)", group = DASHBOARD_GROUP)
 statsPositionInput = input.string(position.top_right, "", options = [position.top_left, position.top_center, position.top_right, position.middle_left, position.middle_right, position.bottom_left, position.bottom_center, position.bottom_right], inline = "stats", group = DASHBOARD_GROUP)
+statsDaysInput = input.int(7, "นับสถิติย้อนหลัง (วัน)", minval = 0, tooltip = "นับเฉพาะเทรดที่เข้าภายใน N วันล่าสุด (นับจากแท่งล่าสุดบนกราฟ) · 0 = ทุกแท่งที่ TradingView โหลดมา · ตั้งให้ใกล้กับช่วงที่บอทใช้จะได้เทียบกันได้", group = DASHBOARD_GROUP)
 adxModeInput = input.string(MODE_COMPACT, "แดชบอร์ด ADX", options = [MODE_FULL, MODE_COMPACT, MODE_HIDDEN], inline = "adx", tooltip = "บอกว่าตลาดมีเทรนด์แรงไหม · ย่อ = ค่า ADX + สถานะเข้าได้/รอ", group = DASHBOARD_GROUP)
 adxPositionInput = input.string(position.middle_right, "", options = [position.top_left, position.top_center, position.top_right, position.middle_left, position.middle_right, position.bottom_left, position.bottom_center, position.bottom_right], inline = "adx", group = DASHBOARD_GROUP)
 mtfModeInput = input.string(MODE_COMPACT, "เทรนด์หลายไทม์เฟรม", options = [MODE_FULL, MODE_COMPACT, MODE_HIDDEN], inline = "mtf", tooltip = "เทรนด์ของ 5m/15m/1h/4h/1D · ย่อ = ลูกศร ▲ ขึ้น ▼ ลง • กลาง", group = DASHBOARD_GROUP)
@@ -228,6 +229,10 @@ var int totalSignals = 0
 var int winningTrades = 0
 var int losingTrades = 0
 var float totalProfitR = 0.0
+var int tradeEntryTime = na
+int statsWindowStart = statsDaysInput == 0 ? na : last_bar_time - statsDaysInput * 86400000
+// Only trades entered inside the statistics window are counted.
+bool countStats = statsDaysInput == 0 or (not na(tradeEntryTime) and tradeEntryTime >= statsWindowStart)
 var bool tradeHistoryRecorded = false
 var array<string> tradeDirectionHistory = array.new_string(0)
 var array<string> tradeOutcomeHistory = array.new_string(0)
@@ -277,8 +282,8 @@ if tradeDirection != 0 and not tradeResolved
     if stopHitForStats
         stopLossHitEvent := true
         stopLossHitPrice := stopLossLevel
-        losingTrades += 1
-        totalProfitR -= 1.0
+        losingTrades += countStats ? 1 : 0
+        totalProfitR -= countStats ? 1.0 : 0.0
         if not tradeHistoryRecorded
             array.unshift(tradeDirectionHistory, tradeDirection == 1 ? "Long" : "Short")
             array.unshift(tradeOutcomeHistory, "SL")
@@ -293,8 +298,8 @@ if tradeDirection != 0 and not tradeResolved
         tradeResolved := true
         tradeDirection := 0
     else if takeProfit1HitForStats
-        winningTrades += 1
-        totalProfitR += tp1RiskRewardInput
+        winningTrades += countStats ? 1 : 0
+        totalProfitR += countStats ? tp1RiskRewardInput : 0.0
         tradeResolved := true
 
 // After TP1 the trade keeps running toward TP2/TP3; if price comes back to the original SL, the trade ends.
@@ -372,11 +377,12 @@ if tradeDirection != 0
 float reversalRisk = math.abs(entryLevel - stopLossLevel)
 float reversalR = tradeDirection != 0 and reversalRisk > 0 ? (close - entryLevel) * tradeDirection / reversalRisk : 0.0
 if (buySignal or sellSignal) and tradeDirection != 0 and not tradeResolved
-    totalProfitR += reversalR
-    if reversalR > 0
-        winningTrades += 1
-    else
-        losingTrades += 1
+    if countStats
+        totalProfitR += reversalR
+        if reversalR > 0
+            winningTrades += 1
+        else
+            losingTrades += 1
     tradeResolved := true
 
 // Record the previous trade when an opposite signal occurs.
@@ -412,7 +418,8 @@ if buySignal
     reentryShortArmed := false
     emaLongPullbackArmed := false
     emaShortPullbackArmed := false
-    totalSignals += 1
+    totalSignals += statsDaysInput == 0 or time >= statsWindowStart ? 1 : 0
+    tradeEntryTime := time
 if sellSignal
     entryLevel := close
     stopLossLevel := entryLevel + atrValue * slAtrMultiplierInput
@@ -430,7 +437,8 @@ if sellSignal
     reentryShortArmed := false
     emaLongPullbackArmed := false
     emaShortPullbackArmed := false
-    totalSignals += 1
+    totalSignals += statsDaysInput == 0 or time >= statsWindowStart ? 1 : 0
+    tradeEntryTime := time
 
 //
 // === Dashboard with Telegram Link ===
@@ -812,7 +820,8 @@ if barstate.islast
         int closedTrades = winningTrades + losingTrades
         string winRateText = closedTrades > 0 ? str.tostring(100.0 * winningTrades / closedTrades, "#.##") + " %" : "-"
         color profitColor = totalProfitR >= 0 ? upColorInput : downColorInput
-        string tipWinRate = "ชนะ ÷ เทรดที่รู้ผล × 100 · สมมติปิดทั้งหมดที่ TP1 หรือ SL หรือเมื่อเกิดสัญญาณกลับทิศ"
+        string periodText = statsDaysInput == 0 ? "ทุกแท่งบนกราฟ" : str.tostring(statsDaysInput) + " วันล่าสุด"
+        string tipWinRate = "ชนะ ÷ เทรดที่รู้ผล × 100 · นับ" + periodText + " · สมมติปิดทั้งหมดที่ TP1 หรือ SL หรือเมื่อเกิดสัญญาณกลับทิศ"
         string tipProfit = "ผลรวมกำไร/ขาดทุนเป็นหน่วย R (1R = ระยะ SL) · ยังไม่หัก spread"
         if statsModeInput == MODE_COMPACT
             dashCell(statsTable, 0, 0, "อัตราชนะ", chart.fg_color, dashHeaderBg, tipWinRate)
@@ -820,7 +829,7 @@ if barstate.islast
             dashCell(statsTable, 0, 1, "กำไร", profitColor, na, tipProfit)
             dashCell(statsTable, 1, 1, str.tostring(totalProfitR, "#.##") + " R", profitColor, na, tipProfit)
         else
-            dashCell(statsTable, 0, 0, "สถิติย้อนหลัง", chart.fg_color, dashHeaderBg, "คำนวณจากสัญญาณทั้งหมดบนกราฟนี้ (เท่าที่ TradingView โหลดมา)")
+            dashCell(statsTable, 0, 0, "สถิติ " + periodText, chart.fg_color, dashHeaderBg, "คำนวณจากเทรดที่เข้าภายใน" + periodText + " (ตั้งได้ที่ \"นับสถิติย้อนหลัง (วัน)\")")
             dashCell(statsTable, 1, 0, "", chart.fg_color, dashHeaderBg)
             dashCell(statsTable, 0, 1, "สัญญาณ", chart.fg_color, na, "จำนวน BUY + SELL ทั้งหมด")
             dashCell(statsTable, 1, 1, str.tostring(totalSignals), chart.fg_color)
